@@ -1,0 +1,16 @@
+# taskconfig.yaml: Main task configuration
+# ----------------------------------------
+# workspace:
+# TODO: rearrange the lay out
+workspace: "/home/lee/code/isaactasks/ant"
+env_cfg_path: "/home/lee/code/isaactasks/ant/source/ant/ant/tasks/direct/ant/ant_env.py"
+description: "to make the ant run forward as fast as possible"
+
+
+# task settings:
+task: Template-Ant-Direct-v0
+num_envs: None
+seed: None
+checkpoint: None
+max_iterations: None
+

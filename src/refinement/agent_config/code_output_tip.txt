@@ -1,0 +1,3 @@
+The output of the reward function should consist of only one item: the total reward,
+The code output should be formatted as a python code string: "```python ... ```".
+Do not change the function signature from the reward function template.
