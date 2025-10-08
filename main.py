@@ -89,6 +89,7 @@ def main():
     seed = none_if_str_none(task_config.get('seed'))
     max_iterations = none_if_str_none(task_config.get('max_iterations'))
     checkpoint = task_config.get('checkpoint') if task_config.get('checkpoint') != "None" else None
+    whichpython = task_config.get('python_env') if task_config.get('python_env') != "None" else "python"
 
 
     # if the workspace is the official IsaacLab, then cmd_head=["./isaaclab.sh", "-p", "scripts/reinforcement_learning/rl_games/train.py"]
@@ -99,8 +100,8 @@ def main():
 
     # simtrain, if simtrain is true, first access the workspace and run 
     # simtrain
-    def train_command():
-        cmd_head = ["python", "scripts/rl_games/train.py"]
+    def train_command(whichpython="python"):
+        cmd_head = [whichpython, "scripts/rl_games/train.py"]
         cmd = cmd_head + ["--task", task]
         
         if num_envs is not None:
@@ -134,7 +135,7 @@ def main():
         play_command()
 
     if args.refine:
-        from src.refinement.files_operation import load_env_cfg, load_prompts # , write_reward_to_file
+        from src.refinement.files_operation import load_env_cfg, load_prompts, write_code_to_file
         # Eureka refinement
         if not args.refineconfig:
             print("Error: --refineconfig argument is required when --refine is set.")
@@ -159,22 +160,24 @@ def main():
         # Eureka refinement
         # Init prompts
         env_cfg_dict = load_env_cfg(env_cfg_path)
-        prompts_dict = load_prompts()
-        prompts_dict["task_description"] = task_config.get('description')
         # Init LLM agents
-        llm_agent = EurekaAgent(prompts_dict, env_cfg_dict, agent_config=refine_config.get('agent', {}))
+        task_description = task_config.get('description')
+        llm_agent = EurekaAgent(task_description, env_cfg_dict, agent_config=refine_config.get('agent', {}))
         # Run refinement loop
         for i in range(iteration):
             print(f"Refinement iteration {i+1}/{iteration}")
             for respond_id in range(sample):
                 # Sample new reward functions
                 reward_func = llm_agent.func_gen()
-                # Evaluate the new reward function
-                write_reward_to_file(reward_func, file_path, component_path)
-                train_command()
-            # Select the best reward function
-            # Refine the prompt for the next iteration
-            prompts = None 
+                # Write the new reward function to the environment config path
+                rewardrules = r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward'
+                write_code_to_file(reward_func, env_cfg_path, rewardrules)
+                train_command(whichpython=whichpython)
+                # TODO: The evaluation metric
+
+            # TODO: Finding which one is the best
+            
+            # TODO: Adding the feedback into the llm_agent
 
 
 

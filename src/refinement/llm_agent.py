@@ -6,10 +6,12 @@ Handles communication with various LLM APIs and prompt engineering.
 """
 
 from openai import OpenAI
+from src.refinement.files_operation import load_prompts
 
 class EurekaAgent():
-    def __init__(self, prompts_dict:dict, env_cfg_dict: dict, agent_config: dict):
-        self.prompts_dict = prompts_dict
+    def __init__(self, task_description, env_cfg_dict: dict, agent_config: dict):
+        self.prompts_dict = load_prompts()
+        self.task_description = task_description
         self.env_cfg_dict = env_cfg_dict
         self.model = agent_config.get('model')
         self.base_url = agent_config.get('base_url')
@@ -46,39 +48,48 @@ class EurekaAgent():
             self.env_cfg_dict["observation_code"]
             + self.env_cfg_dict["intermediate_code"]
         )
-        task_description = self.prompts_dict["task_description"]
-        user_content= initial_user.format(task_obs_code_string=task_obs_code_string, task_description=task_description)
+        user_content= initial_user.format(task_obs_code_string=task_obs_code_string, task_description=self.task_description)
         return system_content, user_content
     
     # def add_feedback(self, feedback: str):
     #     pass
 
     def func_gen(self) -> str:
-        # sending the messaages to the LLM API and get the response
-        completion = self.client.chat.completions.create(
-            extra_headers={
-                # Optionally set these if you want rankings on openrouter.ai
-                # "HTTP-Referer": "<YOUR_SITE_URL>",
-                # "X-Title": "<YOUR_SITE_NAME>",
-            },
-            extra_body={},
-            model=self.model or "x-ai/grok-code-fast-1",
-            messages=self.messages
-        )
-        response = completion.choices[0].message.content
-        # filtering the response to extract only the python function code
-        import re
-        patterns = [
-            r'```python(.*?)```',
-            r'```(.*?)```',
-            r'"""(.*?)"""',
-            r'""(.*?)""',
-            r'"(.*?)"',
-        ]
-        code_blocks = None
-        for pattern in patterns:
-            matches = re.findall(pattern, response, re.DOTALL)
-            if matches:
-                code_blocks = matches[0].strip()
-                return code_blocks
-        raise ValueError("No Python code block found in the response.")
+        max_retries = 10
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # sending the messaages to the LLM API and get the response
+                completion = self.client.chat.completions.create(
+                    extra_headers={},
+                    extra_body={},
+                    model=self.model or "x-ai/grok-code-fast-1",
+                    messages=self.messages
+                )
+                response = completion.choices[0].message.content
+                # filtering the response to extract only the python function code
+                import re
+                patterns = [
+                    r'```python(.*?)```',
+                    r'```(.*?)```',
+                    r'"""(.*?)"""',
+                    r'""(.*?)""',
+                    r'"(.*?)"',
+                ]
+                
+                for pattern in patterns:
+                    matches = re.findall(pattern, response, re.DOTALL)
+                    if matches:
+                        code_blocks = matches[0].strip()
+                        if re.search(r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward', code_blocks, re.DOTALL):
+                            return code_blocks
+                
+                # If we get here, no valid code block was found
+                retry_count += 1
+            except Exception as e:
+                retry_count += 1
+                print(f"Attempt {retry_count} failed: {str(e)}")
+            
+            # If we've exhausted all retries
+            return "ERROR: Failed to generate valid code after 10 attempts. The LLM response did not contain a properly formatted compute_rewards function."

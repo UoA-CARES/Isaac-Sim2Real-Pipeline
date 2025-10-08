@@ -82,3 +82,24 @@ def load_env_cfg(env_cfg_path):
     return env_cfg_dict
 
 
+
+
+def write_code_to_file(func_strings: str, target_script: str, rules: str):
+    # Read the target script file
+    try:
+        with open(target_script, 'r') as f:
+            script_content = f.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Target script file not found: {target_script}")
+
+    # Use the provided regex rules to find the function to replace
+    pattern = re.compile(rules, re.DOTALL)
+    if not pattern.search(script_content):
+        raise ValueError("Could not find the target function in the target script file using the provided rules.")
+
+    # Replace the matched function with the new func_strings
+    new_script_content = pattern.sub(func_strings, script_content, count=1)
+
+    # Write the modified content back to the file
+    with open(target_script, 'w') as f:
+        f.write(new_script_content)
