@@ -1,5 +1,5 @@
 # LLM parameters
-model: gpt-4-0314  # LLM model (other options are gpt-4, gpt-4-0613, gpt-3.5-turbo-16k-0613)
+# model: gpt-4-0314  # LLM model (other options are gpt-4, gpt-4-0613, gpt-3.5-turbo-16k-0613)
 
 # Eureka parameters
 iteration: 2 # how many iterations of Eureka to run
@@ -11,5 +11,4 @@ num_eval: 5 # number of evaluation episodes to run for the final reward
 agent:
   model: "x-ai/grok-code-fast-1"
   base_url: "https://openrouter.ai/api/v1"
-  api_key: "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"
 

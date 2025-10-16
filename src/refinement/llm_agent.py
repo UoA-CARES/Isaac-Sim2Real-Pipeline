@@ -4,7 +4,9 @@ LLM Agent Module
 Implements the LLM-based agent for autonomous simulation refinement.
 Handles communication with various LLM APIs and prompt engineering.
 """
-
+import re
+import os
+from dotenv import load_dotenv
 from openai import OpenAI
 from src.refinement.files_operation import load_prompts
 
@@ -15,7 +17,8 @@ class EurekaAgent():
         self.env_cfg_dict = env_cfg_dict
         self.model = agent_config.get('model')
         self.base_url = agent_config.get('base_url')
-        self.api_key = agent_config.get('api_key')
+        # load_dotenv()
+        self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.client = OpenAI(
             base_url=self.base_url,
             api_key=self.api_key
@@ -69,7 +72,6 @@ class EurekaAgent():
                 )
                 response = completion.choices[0].message.content
                 # filtering the response to extract only the python function code
-                import re
                 patterns = [
                     r'```python(.*?)```',
                     r'```(.*?)```',
