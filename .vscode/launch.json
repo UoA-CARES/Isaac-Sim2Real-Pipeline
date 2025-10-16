@@ -23,7 +23,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
-            "args": ["--simtrain", "--taskconfig", "configs/taskconfig.yaml"],
+            "args": ["--simtrain", "--taskconfig", "/home/lee/code/isaactasks/ant/taskconfig.yaml"],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
         },

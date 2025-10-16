@@ -129,9 +129,9 @@ def read_tb(tb_file, tag):
     return consecutive_successes_events
 
 
-def get_latest_checkpoint_dir(base_log_path):
+def get_latest_checkpoint_dir(logs_path):
     # Find all timestamp directories
-    timestamp_dirs = glob.glob(f"{base_log_path}/*")
+    timestamp_dirs = glob.glob(f"{logs_path}/*")
     
     # Filter for directories only and sort by creation time (newest first)
     timestamp_dirs = [d for d in timestamp_dirs if os.path.isdir(d)]

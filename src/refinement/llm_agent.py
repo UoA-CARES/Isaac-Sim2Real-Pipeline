@@ -30,7 +30,7 @@ class EurekaAgent():
 
     def init_prompt(self):
         # system prompt
-        code_output_tip = self.prompts_dict["code_output_tip"]
+        self.code_output_tip = self.prompts_dict["code_output_tip"]
         reward_template = self.env_cfg_dict["reward_code"]
         initial_system = self.prompts_dict["initial_system"]
         system_content = initial_system.format(task_reward_template=reward_template) + code_output_tip
@@ -54,8 +54,30 @@ class EurekaAgent():
         user_content= initial_user.format(task_obs_code_string=task_obs_code_string, task_description=self.task_description)
         return system_content, user_content
     
-    # def add_feedback(self, feedback: str):
-    #     pass
+    def add_feedback(self, feedback: dict):
+        # refine_record[i].append({
+        #     'ckpt': log_path,
+        #     'max_con_successes': max_con_successes,
+        #     'tb_path': tb_path,
+        #     'prompt': llm_agent.messages,
+        #     'reward_func': reward_func,
+        #     "responses_content": raw_response,
+        #     "feedback_path": os.path.join(log_path, "training_record", "training_summary.txt")
+        # })
+        # TODO: feedback_content
+        with open(feedback["feedback_path"], "r") as f:
+            feedback_content = f.read()
+        feedback_content += self.code_output_tip
+
+        # Add feedback message to the conversation history
+        if len(self.messages) == 2:
+            self.messages += [{"role": "assistant", "content": feedback["responses_content"]}]
+            self.messages += [{"role": "user", "content": feedback_content}]
+        else:
+            assert len(self.messages) == 4
+            self.messages[-2] = {"role": "assistant", "content": feedback["responses_content"]}
+            self.messages[-1] = {"role": "user", "content": feedback_content}
+    
 
     def func_gen(self) -> str:
         max_retries = 10
@@ -85,7 +107,7 @@ class EurekaAgent():
                     if matches:
                         code_blocks = matches[0].strip()
                         if re.search(r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward', code_blocks, re.DOTALL):
-                            return code_blocks
+                            return code_blocks, response
                 
                 # If we get here, no valid code block was found
                 retry_count += 1
@@ -94,4 +116,4 @@ class EurekaAgent():
                 print(f"Attempt {retry_count} failed: {str(e)}")
             
             # If we've exhausted all retries
-            return "ERROR: Failed to generate valid code after 10 attempts. The LLM response did not contain a properly formatted compute_rewards function."
+            return "ERROR: Failed to generate valid code after 10 attempts. The LLM response did not contain a properly formatted compute_rewards function.", None

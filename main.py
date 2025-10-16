@@ -99,21 +99,19 @@ def main():
  
     # simtrain, if simtrain is true, first access the workspace and run 
     # simtrain
-    def train_command(whichpython="python", silence=True):
-        # mkdir training_record under logs_path
-        os.makedirs(os.path.join(logs_path, "training_record"), exist_ok=True)
+    def train_command(whichpython="python", silence=False, log_name=None):
 
         # OUTPUT: log_path (if None then the training is no sccusseful), consecutive successes, best checkpoint path
         cmd_head = [whichpython, "scripts/rl_games/train.py"]
         cmd = cmd_head + ["--task", task]
-        
-        if num_envs is not None:
+
+        if num_envs != "None":
             cmd.extend(["--num_envs", str(num_envs)])
-        if seed is not None:
+        if seed != "None":
             cmd.extend(["--seed", str(seed)])
-        if max_iterations is not None:
+        if max_iterations != "None":
             cmd.extend(["--max_iterations", str(max_iterations)])
-        if checkpoint is not None:
+        if checkpoint != "None":
             cmd.extend(["--checkpoint", checkpoint])
         if silence:
             cmd.extend(["--verbose > /dev/null 2>&1"])  # --verbose > /dev/null 2>&1
@@ -123,7 +121,7 @@ def main():
         subprocess.run(cmd, cwd=workspace)
         
         # Get the latest log path
-        log_path = get_latest_checkpoint_dir(logs_path=task_config.get('logs_path'))
+        log_path = get_latest_checkpoint_dir(logs_path=logs_path)
 
         # If the training is not successful
         if log_path is None:
@@ -131,6 +129,15 @@ def main():
 
         else:
             # Tensorboard path
+            # mkdir training_record under logs_path
+            if log_name is not None:
+                # Rename the log_path folder to log_name
+                new_log_path = os.path.join(os.path.dirname(log_path), log_name)
+                os.rename(log_path, new_log_path)
+                log_path = new_log_path
+
+            os.makedirs(os.path.join(log_path, "training_record"), exist_ok=True)
+            
             tb_path = os.path.join(log_path, "summaries", os.listdir(os.path.join(log_path, "summaries"))[0])
             # Summarize the tensorboard file for LLM analysis
             summarize_tensorboard(tb_path, os.path.join(log_path, "training_record", "training_summary.txt"))
@@ -152,7 +159,7 @@ def main():
 
 
     if args.simtrain:
-        log_path, max_con_successes, tb_path = train_command()
+        log_path, max_con_successes, tb_path = train_command(whichpython=whichpython, silence=False, log_name="testtest")
         print(f"Training completed.")
         print(f"  Log path: {log_path}")
         print(f"  Max Consecutive Successes: {max_con_successes}")
@@ -192,12 +199,12 @@ def main():
             print(f"Refinement iteration {i+1}/{iteration}")
             for respond_id in range(sample):
                 # Sample new reward functions
-                reward_func = llm_agent.func_gen()
+                reward_func, raw_response = llm_agent.func_gen()
                 # Write the new reward function to the environment config path
                 rewardrules = r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward'
                 write_code_to_file(reward_func, env_cfg_path, rewardrules)
                 # train the new reward function in sim
-                log_path, max_con_successes, tb_path = train_command(whichpython=whichpython)
+                log_path, max_con_successes, tb_path = train_command(whichpython=whichpython, silence=True, log_name=f"iter{i+1}_sample{respond_id+1}")
                 # Check the successfulness
                 if log_path is None:
                     print(f"  Sample {respond_id}: Training failed, skipping...")
@@ -208,7 +215,9 @@ def main():
                     'max_con_successes': max_con_successes,
                     'tb_path': tb_path,
                     'prompt': llm_agent.messages,
-                    'reward_func': reward_func
+                    'reward_func': reward_func,
+                    "responses_content": raw_response,
+                    "feedback_path": os.path.join(log_path, "training_record", "training_summary.txt")
                 })
 
             # Find the best max_con_successes in this iteration
@@ -225,9 +234,9 @@ def main():
             else:
                 i += 1  # Only increment if at least one sample succeeded
 
-            # TODO: Adding the feedback into the llm_agent
+            # Adding the feedback into the llm_agent
             if i < iteration:  # No need to prepare prompts for the next iteration if this was the last one
-                llm_agent.receive_feedback(refine_record[i][best_idx])
+                llm_agent.add_feedback(refine_record[i][best_idx])
 
 if __name__ == "__main__":
     main()
