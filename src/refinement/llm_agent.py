@@ -33,7 +33,7 @@ class EurekaAgent():
         self.code_output_tip = self.prompts_dict["code_output_tip"]
         reward_template = self.env_cfg_dict["reward_code"]
         initial_system = self.prompts_dict["initial_system"]
-        system_content = initial_system.format(task_reward_template=reward_template) + code_output_tip
+        system_content = initial_system.format(task_reward_template=reward_template) + self.code_output_tip
         # user prompt
         # task_dict = {
         #     "code_output_tip": code_output_tip,
@@ -65,8 +65,11 @@ class EurekaAgent():
         #     "feedback_path": os.path.join(log_path, "training_record", "training_summary.txt")
         # })
         # TODO: feedback_content
-        with open(feedback["feedback_path"], "r") as f:
-            feedback_content = f.read()
+        if feedback["ckpt"] is None:
+            feedback_content = "The training failed, please try to fix the issues in the previous code."
+        else:
+            with open(feedback["feedback_path"], "r") as f:
+                feedback_content = f.read()
         feedback_content += self.code_output_tip
 
         # Add feedback message to the conversation history
@@ -116,4 +119,4 @@ class EurekaAgent():
                 print(f"Attempt {retry_count} failed: {str(e)}")
             
             # If we've exhausted all retries
-            return "ERROR: Failed to generate valid code after 10 attempts. The LLM response did not contain a properly formatted compute_rewards function.", None
+        raise RuntimeError("Failed to generate valid reward function code after 10 attempts.")

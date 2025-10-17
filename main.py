@@ -113,11 +113,11 @@ def main():
             cmd.extend(["--max_iterations", str(max_iterations)])
         if checkpoint != "None":
             cmd.extend(["--checkpoint", checkpoint])
-        if silence:
-            cmd.extend(["--verbose > /dev/null 2>&1"])  # --verbose > /dev/null 2>&1
-
         # Run the command in the specified workspace 
         cmd.append("--headless")
+        # TODO: silence
+        # if silence:
+        #     cmd.extend(["--verbose > /dev/null 2>&1"])  # --verbose > /dev/null 2>&1
         subprocess.run(cmd, cwd=workspace)
         
         # Get the latest log path
@@ -182,7 +182,6 @@ def main():
         iteration = int(refine_config.get('iteration'))
         sample = int(refine_config.get('sample'))
         num_eval = int(refine_config.get('num_eval'))
-        env_cfg_path = task_config.get('env_cfg_path')
         
         # Eureka refinement
         # The refine record including:
@@ -236,7 +235,7 @@ def main():
 
             # Adding the feedback into the llm_agent
             if i < iteration:  # No need to prepare prompts for the next iteration if this was the last one
-                llm_agent.add_feedback(refine_record[i][best_idx])
+                llm_agent.add_feedback(refine_record[i-1][best_idx])
 
 if __name__ == "__main__":
     main()
