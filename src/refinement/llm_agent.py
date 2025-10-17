@@ -92,7 +92,9 @@ class EurekaAgent():
                 completion = self.client.chat.completions.create(
                     extra_headers={},
                     extra_body={},
-                    model=self.model or "x-ai/grok-code-fast-1",
+                    model=self.model,
+                    temperature=0.8,
+                    n=1,
                     messages=self.messages
                 )
                 response = completion.choices[0].message.content
