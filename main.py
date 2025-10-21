@@ -39,6 +39,7 @@ import argparse
 import subprocess
 from src.refinement.llm_agent import EurekaAgent
 from src.refinement.files_operation import load_env_cfg, load_prompts, write_code_to_file, read_tb, get_latest_checkpoint_dir, summarize_tensorboard
+import shutil
 
 
 def load_config(config_path):
@@ -118,7 +119,11 @@ def main():
         # TODO: silence
         # if silence:
         #     cmd.extend(["--verbose > /dev/null 2>&1"])  # --verbose > /dev/null 2>&1
-        subprocess.run(cmd, cwd=workspace)
+        try:
+            subprocess.run(cmd, cwd=workspace)
+        except Exception as e:
+            print(f"Error during training subprocess: {e}")
+            return None, -2**31, None
         
         # Get the latest log path
         log_path = get_latest_checkpoint_dir(logs_path=logs_path)
@@ -169,6 +174,24 @@ def main():
         play_command()
 
     if args.refine:
+        # TODO: delete all the folder under: /home/lee/code/isaactasks/ant/logs/rl_games/ant_direct
+        # Clear previous logs if running refinement
+        logs_dir = "/home/lee/code/isaactasks/ant/logs/rl_games/ant_direct"
+        if os.path.exists(logs_dir):
+            print(f"Clearing previous logs at {logs_dir}")
+            for item in os.listdir(logs_dir):
+                item_path = os.path.join(logs_dir, item)
+                if os.path.isdir(item_path):
+                    try:
+                        shutil.rmtree(item_path)
+                        print(f"  Deleted: {item}")
+                    except Exception as e:
+                        print(f"  Failed to delete {item}: {e}")
+        # Run git checkout . under /home/lee/code/isaactasks
+        print("Running git checkout . under /home/lee/code/isaactasks")
+        subprocess.run(["git", "checkout", "."], cwd="/home/lee/code/isaactasks")
+        
+
         # Eureka refinement
         if not args.refineconfig:
             print("Error: --refineconfig argument is required when --refine is set.")
@@ -199,8 +222,11 @@ def main():
             for respond_id in range(sample):
                 # Sample new reward functions
                 reward_func, raw_response = llm_agent.func_gen()
+                # clear the worksapce
+                subprocess.run(["git", "checkout", "."], cwd="/home/lee/code/isaactasks")
+                print(f"  Sample {respond_id+1}/{sample}: Generated new reward function.")
                 # Write the new reward function to the environment config path
-                rewardrules = r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward'
+                rewardrules = r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward, reward_components'
                 write_code_to_file(reward_func, env_cfg_path, rewardrules)
                 # train the new reward function in sim
                 log_path, max_con_successes, tb_path = train_command(whichpython=whichpython, silence=True, log_name=f"iter{i+1}_sample{respond_id+1}")

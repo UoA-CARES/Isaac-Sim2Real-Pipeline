@@ -13,7 +13,11 @@ def load_prompts():
     code_output_tip_path = os.path.join(config_dir, "code_output_tip.txt")
     initial_system_path = os.path.join(config_dir, "initial_system.txt")
     initial_user_path = os.path.join(config_dir, "initial_user.txt")
-    
+    # feedback
+    code_feedback_path = os.path.join(config_dir, "code_feedback.txt")
+    execution_error_feedback_path = os.path.join(config_dir, "execution_error_feedback.txt")
+    policy_feedback_path = os.path.join(config_dir, "policy_feedback.txt")
+
     # Read the configuration files
     try:
         with open(code_output_tip_path, 'r') as f:
@@ -22,13 +26,21 @@ def load_prompts():
             initial_system = f.read()
         with open(initial_user_path, 'r') as f:
             initial_user = f.read()
+        with open(code_feedback_path, 'r') as f:
+            code_feedback = f.read()
+        with open(execution_error_feedback_path, 'r') as f:
+            execution_error_feedback = f.read()
+        with open(policy_feedback_path, 'r') as f:
+            policy_feedback = f.read()
     except FileNotFoundError as e:
         raise FileNotFoundError(f"Configuration file not found: {e}")
-    
     return {
         "code_output_tip": code_output_tip,
         "initial_system": initial_system,
         "initial_user": initial_user,
+        "code_feedback": code_feedback,
+        "execution_error_feedback": execution_error_feedback,
+        "policy_feedback": policy_feedback,
     }
 
 
@@ -43,19 +55,19 @@ def load_env_cfg(env_cfg_path):
     except FileNotFoundError:
         raise FileNotFoundError(f"Environment config file not found: {env_cfg_path}")
     
-    # Extract the observation method (_get_observations) to return observations
-    observation_code = ""
-    observation_pattern = re.compile(r'def\s+_get_observations\s*\([^)]*\).*?return\s+observations', re.DOTALL)
-    match = observation_pattern.search(env_config_content)
-    if match:
-        observation_code = match.group(0)
-    else:
-        raise ValueError("Could not find the _get_observations method in the environment config file.")
+    # # Extract the observation method (_get_observations) to return observations
+    # observation_code = ""
+    # observation_pattern = re.compile(r'def\s+_get_observations\s*\([^)]*\).*?return\s+observations', re.DOTALL)
+    # match = observation_pattern.search(env_config_content)
+    # if match:
+    #     observation_code = match.group(0)
+    # else:
+    #     raise ValueError("Could not find the _get_observations method in the environment config file.")
     
     # Extract reward calculation code - from @torch.jit.script def compute_rewards to return total_reward
     reward_code = ""
     compute_rewards_pattern = re.compile(
-        r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward', re.DOTALL
+        r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward, reward_components', re.DOTALL
     )
     match = compute_rewards_pattern.search(env_config_content)
     if match:
@@ -63,22 +75,21 @@ def load_env_cfg(env_cfg_path):
     else:
         raise ValueError("Could not find the compute_rewards function in the environment config file.")
 
-    # Extract compute_intermediate_values function - from @torch.jit.script to its return values
-    intermediate_code = ""
-    intermediate_pattern = re.compile(
-        r'@torch\.jit\.script\s*\n*def\s+compute_intermediate_values\s*\([^)]*\).*?return\s+\(\s*[^)]*\s*\)', re.DOTALL
-    )
-    match = intermediate_pattern.search(env_config_content)
-    if match:
-        intermediate_code = match.group(0)
-    else:
-        raise ValueError("Could not find the compute_intermediate_values function in the environment config file.")
+    # # Extract compute_intermediate_values function - from @torch.jit.script to its return values
+    # intermediate_code = ""
+    # intermediate_pattern = re.compile(
+    #     r'@torch\.jit\.script\s*\n*def\s+compute_intermediate_values\s*\([^)]*\).*?return\s+\(\s*[^)]*\s*\)', re.DOTALL
+    # )
+    # match = intermediate_pattern.search(env_config_content)
+    # if match:
+    #     intermediate_code = match.group(0)
+    # else:
+    #     raise ValueError("Could not find the compute_intermediate_values function in the environment config file.")
     
     # Combine all extracted information
     env_cfg_dict = {
-        "observation_code": observation_code,
+        "env_code": env_config_content,
         "reward_code": reward_code,
-        "intermediate_code": intermediate_code,
     }
     return env_cfg_dict
 
@@ -144,7 +155,6 @@ def get_latest_checkpoint_dir(logs_path):
     return timestamp_dirs[0] if os.path.exists(timestamp_dirs[0]) else None
 
 
-
 def summarize_tensorboard(event_file_path, output_txt_path):
     """
     Reads a TensorBoard event file, summarizes the scalar data, and writes
@@ -153,6 +163,7 @@ def summarize_tensorboard(event_file_path, output_txt_path):
     Args:
         event_file_path (str): The path to the .tfevents file.
         output_txt_path (str): The path where the output .txt summary will be saved.
+        # epoch_freq (int): Frequency for sampling metrics in the output. max(int(max_iterations // 10), 1)
     """
     # 1. --- Load the Event File ---
     # Initialize an EventAccumulator and load the event file.
@@ -205,7 +216,12 @@ def summarize_tensorboard(event_file_path, output_txt_path):
         mid_perf = values[mid_idx]
         final_perf = np.mean(values[-initial_idx:]) if initial_idx > 0 else values[-1]
 
-        # 5. --- Format the Output ---
+        # 5. --- Sample metrics at specified frequency ---
+        # max_iterations = 
+        # epoch_freq = max(int(max_iterations // 10), 1)
+        # sampled_values = ['{:.2f}'.format(x) for x in values[::epoch_freq]]
+        
+        # 6. --- Format the Output ---
         summary_lines.append(f"## Metric: {tag}\n")
         summary_lines.append(f"- **Overall Statistics:**")
         summary_lines.append(f"  - Mean: {mean_val:.4f}")
@@ -217,9 +233,12 @@ def summarize_tensorboard(event_file_path, output_txt_path):
         summary_lines.append(f"  - Initial Performance (first 10%): ~{initial_perf:.4f}")
         summary_lines.append(f"  - Mid-Training Performance (at 50%): ~{mid_perf:.4f}")
         summary_lines.append(f"  - Final Performance (last 10%): ~{final_perf:.4f}\n")
+        
+        # summary_lines.append(f"- **Sampled Values (every {epoch_freq} steps):**")
+        # summary_lines.append(f"  - {', '.join(sampled_values)}\n")
         summary_lines.append("-" * 40 + "\n")
 
-    # 6. --- Write to File ---
+    # 7. --- Write to File ---
     with open(output_txt_path, 'w') as f:
         f.write("\n".join(summary_lines))
         

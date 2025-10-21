@@ -33,6 +33,11 @@ class EurekaAgent():
         self.code_output_tip = self.prompts_dict["code_output_tip"]
         reward_template = self.env_cfg_dict["reward_code"]
         initial_system = self.prompts_dict["initial_system"]
+        # feedback
+        self.code_feedback = self.prompts_dict["code_feedback"]
+        self.execution_error_feedback = self.prompts_dict["execution_error_feedback"]
+        self.policy_feedback = self.prompts_dict["policy_feedback"]
+
         system_content = initial_system.format(task_reward_template=reward_template) + self.code_output_tip
         # user prompt
         # task_dict = {
@@ -47,10 +52,11 @@ class EurekaAgent():
         #     "env_file_path": env_cfg_path
         # }
         initial_user = self.prompts_dict["initial_user"]
-        task_obs_code_string = (
-            self.env_cfg_dict["observation_code"]
-            + self.env_cfg_dict["intermediate_code"]
-        )
+        # task_obs_code_string = (
+        #     self.env_cfg_dict["observation_code"]
+        #     + self.env_cfg_dict["intermediate_code"]
+        # )
+        task_obs_code_string = self.env_cfg_dict["env_code"]
         user_content= initial_user.format(task_obs_code_string=task_obs_code_string, task_description=self.task_description)
         return system_content, user_content
     
@@ -64,12 +70,16 @@ class EurekaAgent():
         #     "responses_content": raw_response,
         #     "feedback_path": os.path.join(log_path, "training_record", "training_summary.txt")
         # })
-        # TODO: feedback_content
         if feedback["ckpt"] is None:
-            feedback_content = "The training failed, please try to fix the issues in the previous code."
+            feedback_content = self.execution_error_feedback(traceback_msg="Code Run cannot be executed due to function signature error! Please re-write an entirely new reward function!")
+
         else:
+            # TODO: How to write the reward components?
+            feedback_content = self.policy_feedback
             with open(feedback["feedback_path"], "r") as f:
-                feedback_content = f.read()
+                feedback_content += f.read()
+            feedback_content += self.code_feedback
+
         feedback_content += self.code_output_tip
 
         # Add feedback message to the conversation history
@@ -111,7 +121,7 @@ class EurekaAgent():
                     matches = re.findall(pattern, response, re.DOTALL)
                     if matches:
                         code_blocks = matches[0].strip()
-                        if re.search(r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward', code_blocks, re.DOTALL):
+                        if re.search(r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward, reward_components', code_blocks, re.DOTALL):
                             return code_blocks, response
                 
                 # If we get here, no valid code block was found

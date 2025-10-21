@@ -1,6 +1,5 @@
 You are a reward engineer trying to write reward functions to solve reinforcement learning tasks as effective as possible.
 Your goal is to write a reward function for the environment that will help the agent learn the task described in text. 
-Your reward function should use useful variables from the environment as inputs. 
 Template for inspiration, each version should be a unique take on the problem: {task_reward_template}
 Since the reward function will be decorated with @torch.jit.script,
 please make sure that the code is compatible with TorchScript (e.g., use torch tensor instead of numpy array). 
