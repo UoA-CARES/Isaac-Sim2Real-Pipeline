@@ -33,6 +33,11 @@ Usage:
     * not shown on the prototype
 """
 
+
+# TODO: Evaluation
+# TODO: More Agentic
+# TODO: CKPT and store
+
 import os
 import yaml
 import argparse
@@ -101,40 +106,28 @@ def main():
     # simtrain, if simtrain is true, first access the workspace and run 
     # simtrain
     def train_command(whichpython="python", silence=False, log_name=None):
-
-        # OUTPUT: log_path (if None then the training is no sccusseful), consecutive successes, best checkpoint path
-        cmd_head = [whichpython, "scripts/rl_games/train.py"]
-        cmd = cmd_head + ["--task", task]
-
-        if num_envs != "None":
-            cmd.extend(["--num_envs", str(num_envs)])
-        if seed != "None":
-            cmd.extend(["--seed", str(seed)])
-        if max_iterations != "None":
-            cmd.extend(["--max_iterations", str(max_iterations)])
-        if checkpoint != "None":
-            cmd.extend(["--checkpoint", checkpoint])
-        # Run the command in the specified workspace 
-        cmd.append("--headless")
-        # TODO: silence
-        # if silence:
-        #     cmd.extend(["--verbose > /dev/null 2>&1"])  # --verbose > /dev/null 2>&1
         try:
+            # OUTPUT: log_path (if None then the training is no sccusseful), consecutive successes, best checkpoint path
+            cmd_head = [whichpython, "scripts/rl_games/train.py"]
+            cmd = cmd_head + ["--task", task]
+
+            if num_envs != "None":
+                cmd.extend(["--num_envs", str(num_envs)])
+            if seed != "None":
+                cmd.extend(["--seed", str(seed)])
+            if max_iterations != "None":
+                cmd.extend(["--max_iterations", str(max_iterations)])
+            if checkpoint != "None":
+                cmd.extend(["--checkpoint", checkpoint])
+            # Run the command in the specified workspace 
+            cmd.append("--headless")
+            # TODO: silence
+            # if silence:
+            #     cmd.extend(["--verbose > /dev/null 2>&1"])  # --verbose > /dev/null 2>&1
             subprocess.run(cmd, cwd=workspace)
-        except Exception as e:
-            print(f"Error during training subprocess: {e}")
-            return None, -2**31, None
-        
-        # Get the latest log path
-        log_path = get_latest_checkpoint_dir(logs_path=logs_path)
+            # Get the latest log path
+            log_path = get_latest_checkpoint_dir(logs_path=logs_path)
 
-        # If the training is not successful
-        if log_path is None:
-            return None, -2**31, None
-
-        else:
-            # Tensorboard path
-            # mkdir training_record under logs_path
             if log_name is not None:
                 # Rename the log_path folder to log_name
                 new_log_path = os.path.join(os.path.dirname(log_path), log_name)
@@ -150,6 +143,11 @@ def main():
             consecutive_successes_events = read_tb(tb_path, 'Episode/consecutive_successes')
             max_con_successes = max(event.value for event in consecutive_successes_events)
             return log_path, max_con_successes, tb_path
+
+        except Exception as e:
+            print(f"Error during training subprocess: {e}")
+            return None, -2**31, None
+        
 
     # play command
     def play_command():
@@ -233,8 +231,10 @@ def main():
                 # Check the successfulness
                 if log_path is None:
                     print(f"  Sample {respond_id}: Training failed, skipping...")
+                    summary_path = ""
                 
                 # record the result
+                summary_path = os.path.join(log_path, "training_record", "training_summary.txt")
                 refine_record[i].append({
                     'ckpt': log_path,
                     'max_con_successes': max_con_successes,
@@ -242,7 +242,7 @@ def main():
                     'prompt': llm_agent.messages,
                     'reward_func': reward_func,
                     "responses_content": raw_response,
-                    "feedback_path": os.path.join(log_path, "training_record", "training_summary.txt")
+                    "feedback_path": summary_path
                 })
 
             # Find the best max_con_successes in this iteration

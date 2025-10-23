@@ -121,9 +121,9 @@ def read_tb(tb_file, tag):
     # import time
     # time.sleep(2)
     # Path to the TensorBoard file
+    consecutive_successes_events = None
     if not os.path.exists(tb_file):
         print(f"Error: TensorBoard file not found: {tb_file}")
-        consecutive_successes_events = None
     else:
         print(f"Reading metrics from: {tb_file}")
         # Load the event file
@@ -147,12 +147,9 @@ def get_latest_checkpoint_dir(logs_path):
     # Filter for directories only and sort by creation time (newest first)
     timestamp_dirs = [d for d in timestamp_dirs if os.path.isdir(d)]
     timestamp_dirs.sort(key=os.path.getctime, reverse=True)
-    
-    if not timestamp_dirs:
-        return None
         
     # Get the newest directory and add the nn subfolder
-    return timestamp_dirs[0] if os.path.exists(timestamp_dirs[0]) else None
+    return timestamp_dirs[0]
 
 
 def summarize_tensorboard(event_file_path, output_txt_path):
