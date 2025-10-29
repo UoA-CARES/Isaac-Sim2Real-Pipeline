@@ -8,15 +8,25 @@ import re
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
-from src.refinement.files_operation import load_prompts
+from src.refinement.files_operation import load_prompts, load_env_cfg
 
 class EurekaAgent():
-    def __init__(self, task_description, env_cfg_dict: dict, agent_config: dict):
+    def __init__(self, task_config: dict, agent_config: dict):
+        # task_config = {
+        #     "workspace": workspace,
+        #     "env_cfg_path": os.path.join(workspace, task_yaml.get('env_cfg_path')),
+        #     "logs_path": os.path.join(workspace, task_yaml.get('logs_path')),
+        #     "task_description": task_yaml.get('description'),
+        # }
         self.prompts_dict = load_prompts()
-        self.task_description = task_description
-        self.env_cfg_dict = env_cfg_dict
+        self.task_description = task_config["task_description"]
+        self.env_cfg_dict = load_env_cfg(task_config["env_cfg_path"])
         self.model = agent_config.get('model')
         self.base_url = agent_config.get('base_url')
+        self.samples = agent_config.get('sample', 4)
+        # record
+        self.refine_record = []
+        self.best_idx = []
         # load_dotenv()
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.client = OpenAI(
@@ -59,8 +69,9 @@ class EurekaAgent():
         task_obs_code_string = self.env_cfg_dict["env_code"]
         user_content= initial_user.format(task_obs_code_string=task_obs_code_string, task_description=self.task_description)
         return system_content, user_content
-    
-    def add_feedback(self, feedback: dict):
+
+
+    def receive_feedback(self, train_result: dict):
         # refine_record[i].append({
         #     'ckpt': log_path,
         #     'max_con_successes': max_con_successes,
@@ -70,13 +81,14 @@ class EurekaAgent():
         #     "responses_content": raw_response,
         #     "feedback_path": os.path.join(log_path, "training_record", "training_summary.txt")
         # })
-        if feedback["ckpt"] is None:
+        if train_result is None:
             feedback_content = self.execution_error_feedback(traceback_msg="Code Run cannot be executed due to function signature error! Please re-write an entirely new reward function!")
 
         else:
+            idx = self.best_idx[-1]
             # TODO: How to write the reward components?
             feedback_content = self.policy_feedback
-            with open(feedback["feedback_path"], "r") as f:
+            with open(self.refine_record[-1][idx]["feedback_path"], "r") as f:
                 feedback_content += f.read()
             feedback_content += self.code_feedback
 
@@ -84,15 +96,15 @@ class EurekaAgent():
 
         # Add feedback message to the conversation history
         if len(self.messages) == 2:
-            self.messages += [{"role": "assistant", "content": feedback["responses_content"]}]
+            self.messages += [{"role": "assistant", "content": self.refine_record[-1][idx]["responses_content"]}]
             self.messages += [{"role": "user", "content": feedback_content}]
         else:
             assert len(self.messages) == 4
-            self.messages[-2] = {"role": "assistant", "content": feedback["responses_content"]}
+            self.messages[-2] = {"role": "assistant", "content": self.refine_record[-1][idx]["responses_content"]}
             self.messages[-1] = {"role": "user", "content": feedback_content}
     
 
-    def func_gen(self) -> str:
+    def func_gen(self, messages):
         max_retries = 10
         retry_count = 0
         
@@ -105,7 +117,7 @@ class EurekaAgent():
                     model=self.model,
                     temperature=0.8,
                     n=1,
-                    messages=self.messages
+                    messages=messages
                 )
                 response = completion.choices[0].message.content
                 # filtering the response to extract only the python function code
@@ -132,3 +144,29 @@ class EurekaAgent():
             
             # If we've exhausted all retries
         raise RuntimeError("Failed to generate valid reward function code after 10 attempts.")
+    
+
+    def one_move(self, env_evaluation):
+        self.refine_record.append(list())
+        i=0
+        while i < self.samples:
+            # generate a new reward function string
+            reward_func, raw_response = self.func_gen(self.messages)
+            # test the generated reward function in the environment
+            train_result = env_evaluation(reward_func, log_name=f"iter_{len(self.refine_record)}_sample{i}")
+            # record it
+            if train_result is not None:
+                self.refine_record[-1].append({
+                    "train_result": train_result,
+                    "prompt": self.messages,
+                    "reward_func": reward_func,
+                    "responses_content": raw_response,
+                    "feedback_path": os.path.join(train_result["log_path"], "training_record", "training_summary.txt")
+                })
+                i += 1
+        # Finding the best performance among samples
+        best_idx = max(range(self.samples), key=lambda idx: self.refine_record[-1][idx]['train_result']['max_con_successes'])
+        self.best_idx.append(best_idx)
+        # OPTIONAL: Print the best performance
+        print(f"Best performance (sample {best_idx}): {self.refine_record[-1][best_idx]}")
+        return reward_func

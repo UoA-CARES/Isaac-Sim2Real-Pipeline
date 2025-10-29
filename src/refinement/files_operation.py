@@ -6,7 +6,6 @@ import numpy as np
 from tensorboard.backend.event_processing import event_accumulator
 
 
-
 def load_prompts():
     # Reading configuration files from agent_config directory
     config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "refinement", "agent_config")

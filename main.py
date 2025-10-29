@@ -34,11 +34,10 @@ Usage:
 """
 
 
-# TODO: Evaluation
-# TODO: More Agentic
 # TODO: CKPT and store
 
 import os
+from matplotlib.pylab import sample
 import yaml
 import argparse
 import subprocess
@@ -47,7 +46,7 @@ from src.refinement.files_operation import load_env_cfg, load_prompts, write_cod
 import shutil
 
 
-def load_config(config_path):
+def load_yaml_config(config_path):
     """Safely loads a YAML configuration file."""
     try:
         with open(config_path, 'r') as f:
@@ -83,19 +82,23 @@ def main():
         return
 
     # Load task configuration
-    task_config = load_config(args.taskconfig)
-    workspace = task_config.get('workspace')
-    env_cfg_path = os.path.join(workspace, task_config.get('env_cfg_path'))
-    logs_path = os.path.join(workspace, task_config.get('logs_path'))
-    task_description = task_config.get('description')
+    task_yaml = load_yaml_config(args.taskconfig)
+    workspace = task_yaml.get('workspace')
+
+    task_config = {
+        "workspace": workspace,
+        "env_cfg_path": os.path.join(workspace, task_yaml.get('env_cfg_path')),
+        "logs_path": os.path.join(workspace, task_yaml.get('logs_path')),
+        "task_description": task_yaml.get('description'),
+    }
 
     # command parameters
-    task = task_config.get('task')
-    checkpoint = task_config.get('checkpoint') 
-    whichpython = task_config.get('python_env') 
-    num_envs = task_config.get('num_envs')
-    seed = task_config.get('seed')
-    max_iterations = task_config.get('max_iterations')
+    task = task_yaml.get('task')
+    checkpoint = task_yaml.get('checkpoint') 
+    whichpython = task_yaml.get('python_env') 
+    num_envs = task_yaml.get('num_envs')
+    seed = task_yaml.get('seed')
+    max_iterations = task_yaml.get('max_iterations')
 
     # if the workspace is the official IsaacLab, then cmd_head=["./isaaclab.sh", "-p", "scripts/reinforcement_learning/rl_games/train.py"]
     # if workspace and workspace.rstrip('/').split('/')[-1] == "IsaacLab":
@@ -122,15 +125,17 @@ def main():
             # Run the command in the specified workspace 
             cmd.append("--headless")
             # TODO: silence
-            # if silence:
-            #     cmd.extend(["--verbose > /dev/null 2>&1"])  # --verbose > /dev/null 2>&1
+
             subprocess.run(cmd, cwd=workspace)
             # Get the latest log path
-            log_path = get_latest_checkpoint_dir(logs_path=logs_path)
+            log_path = get_latest_checkpoint_dir(logs_path=task_config["logs_path"])
 
             if log_name is not None:
                 # Rename the log_path folder to log_name
                 new_log_path = os.path.join(os.path.dirname(log_path), log_name)
+                # if exist then delete the old one
+                if os.path.exists(new_log_path):
+                    shutil.rmtree(new_log_path) 
                 os.rename(log_path, new_log_path)
                 log_path = new_log_path
 
@@ -142,11 +147,17 @@ def main():
             # Consecutive Successes
             consecutive_successes_events = read_tb(tb_path, 'Episode/consecutive_successes')
             max_con_successes = max(event.value for event in consecutive_successes_events)
-            return log_path, max_con_successes, tb_path
+            
+            train_rest_dict = {
+                "log_path": log_path,
+                "max_con_successes": max_con_successes,
+                "tb_path": tb_path
+            }
+            return train_rest_dict
 
         except Exception as e:
             print(f"Error during training subprocess: {e}")
-            return None, -2**31, None
+            return None
         
 
     # play command
@@ -194,74 +205,98 @@ def main():
         if not args.refineconfig:
             print("Error: --refineconfig argument is required when --refine is set.")
             return
-        refine_config = load_config(args.refineconfig)
+        refine_config = load_yaml_config(args.refineconfig)
         if not refine_config:
             print("Error: Failed to load refine configuration.")
             return
             
         # Read refine config parameters
         iteration = int(refine_config.get('iteration'))
-        sample = int(refine_config.get('sample'))
         num_eval = int(refine_config.get('num_eval'))
-        
+        eval_workspace = refine_config.get('workspace')
+
+        # evaluation function code
+        def env_evaluation(reward_func, log_name):
+            # clear the workspace
+            subprocess.run(["git", "checkout", "."], cwd=eval_workspace)
+            rewardrules = r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward, reward_components'
+            write_code_to_file(reward_func, task_config["env_cfg_path"], rewardrules)
+            return train_command(whichpython=whichpython, silence=True, log_name=log_name)
+
         # Eureka refinement
         # The refine record including:
         # refine_record = [[{"ckpt": None, "max_con_successes": None, "tb_path": None} for _ in range(sample)] for _ in range(iteration)]
-        refine_record = [list() for _ in range(iteration)]
+        # refine_record = [list() for _ in range(iteration)]
         # Init prompts
-        env_cfg_dict = load_env_cfg(env_cfg_path)
+        # env_cfg_dict = load_env_cfg(env_cfg_path)
         # Init LLM agents
-        llm_agent = EurekaAgent(task_description, env_cfg_dict, agent_config=refine_config.get('agent', {}))
+        llm_agent = EurekaAgent(task_config=task_config, agent_config=refine_config.get('agent', {}))
         # Run refinement loop
-        # for i in range(iteration):
-        i = 0
-        while i < iteration:
-            print(f"Refinement iteration {i+1}/{iteration}")
-            for respond_id in range(sample):
-                # Sample new reward functions
-                reward_func, raw_response = llm_agent.func_gen()
-                # clear the worksapce
-                subprocess.run(["git", "checkout", "."], cwd="/home/lee/code/isaactasks")
-                print(f"  Sample {respond_id+1}/{sample}: Generated new reward function.")
-                # Write the new reward function to the environment config path
-                rewardrules = r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward, reward_components'
-                write_code_to_file(reward_func, env_cfg_path, rewardrules)
-                # train the new reward function in sim
-                log_path, max_con_successes, tb_path = train_command(whichpython=whichpython, silence=True, log_name=f"iter{i+1}_sample{respond_id+1}")
-                # Check the successfulness
-                if log_path is None:
-                    print(f"  Sample {respond_id}: Training failed, skipping...")
-                    summary_path = ""
+        for i in range(1, iteration+1):
+            print(f"Refinement iteration {i}/{iteration}")
+            print("onemoving...")
+            reward_func = llm_agent.one_move(env_evaluation)
+            print("evaluating...")
+            best_eval = None
+            for j in range(num_eval):
+                train_result = env_evaluation(reward_func, log_name=f"iter{i}_final_eval_{j}")
+                if train_result is not None:
+                    if not best_eval or best_eval['max_con_successes'] < train_result['max_con_successes']:
+                        best_eval = train_result
+                print(f"Evaluation result {i}: Max consecutive successes: {best_eval['max_con_successes']}")
+                llm_agent.receive_feedback(best_eval)
+
+
+
+
+
+
+
+            # for respond_id in range(sample):
+            #     # Sample new reward functions
+            #     reward_func, raw_response = llm_agent.func_gen()
+            #     # clear the workspace
+            #     subprocess.run(["git", "checkout", "."], cwd="/home/lee/code/isaactasks")
+            #     print(f"  Sample {respond_id+1}/{sample}: Generated new reward function.")
+            #     # Write the new reward function to the environment config path
+            #     rewardrules = r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward, reward_components'
+            #     write_code_to_file(reward_func, env_cfg_path, rewardrules)
+            #     # train the new reward function in sim
+            #     log_path, max_con_successes, tb_path = train_command(whichpython=whichpython, silence=True, log_name=f"iter{i+1}_sample{respond_id+1}")
+            #     # Check the successfulness
+            #     if log_path is None:
+            #         print(f"  Sample {respond_id}: Training failed, skipping...")
+            #         summary_path = ""
                 
-                # record the result
-                summary_path = os.path.join(log_path, "training_record", "training_summary.txt")
-                refine_record[i].append({
-                    'ckpt': log_path,
-                    'max_con_successes': max_con_successes,
-                    'tb_path': tb_path,
-                    'prompt': llm_agent.messages,
-                    'reward_func': reward_func,
-                    "responses_content": raw_response,
-                    "feedback_path": summary_path
-                })
+            #     # record the result
+            #     summary_path = os.path.join(log_path, "training_record", "training_summary.txt")
+            #     refine_record[i].append({
+            #         'ckpt': log_path,
+            #         'max_con_successes': max_con_successes,
+            #         'tb_path': tb_path,
+            #         'prompt': llm_agent.messages,
+            #         'reward_func': reward_func,
+            #         "responses_content": raw_response,
+            #         "feedback_path": summary_path
+            #     })
 
-            # Find the best max_con_successes in this iteration
-            best_idx = max(range(sample), key=lambda idx: refine_record[i][idx]['max_con_successes'])
-            # Print the best result
-            best_success = refine_record[i][best_idx]['max_con_successes']
-            print(f"  Best consecutive successes in iteration {i+1}: {best_success} (sample {best_idx})")
+            # # Find the best max_con_successes in this iteration
+            # best_idx = max(range(sample), key=lambda idx: refine_record[i][idx]['max_con_successes'])
+            # # Print the best result
+            # best_success = refine_record[i][best_idx]['max_con_successes']
+            # print(f"  Best consecutive successes in iteration {i+1}: {best_success} (sample {best_idx})")
             
-            # If all the samples are failed, then re-run it for this iteration
-            if all(record['ckpt'] is None for record in refine_record[i]):
-                print(f"  All samples failed in iteration {i+1}. Re-running this iteration...")
-                refine_record[i] = list()
-                continue
-            else:
-                i += 1  # Only increment if at least one sample succeeded
+            # # If all the samples are failed, then re-run it for this iteration
+            # if all(record['ckpt'] is None for record in refine_record[i]):
+            #     print(f"  All samples failed in iteration {i+1}. Re-running this iteration...")
+            #     refine_record[i] = list()
+            #     continue
+            # else:
+            #     i += 1  # Only increment if at least one sample succeeded
 
-            # Adding the feedback into the llm_agent
-            if i < iteration:  # No need to prepare prompts for the next iteration if this was the last one
-                llm_agent.add_feedback(refine_record[i-1][best_idx])
+            # # Adding the feedback into the llm_agent
+            # if i < iteration:  # No need to prepare prompts for the next iteration if this was the last one
+            #     llm_agent.add_feedback(refine_record[i-1][best_idx])
 
 if __name__ == "__main__":
     main()
