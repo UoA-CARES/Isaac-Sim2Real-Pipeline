@@ -108,7 +108,7 @@ def main():
  
     # simtrain, if simtrain is true, first access the workspace and run 
     # simtrain
-    def train_command(whichpython="python", silence=False, log_name=None):
+    def train_command(whichpython="python", silence=False, log_name=None, random_seed=False):
         try:
             # OUTPUT: log_path (if None then the training is no sccusseful), consecutive successes, best checkpoint path
             cmd_head = [whichpython, "scripts/rl_games/train.py"]
@@ -122,6 +122,8 @@ def main():
                 cmd.extend(["--max_iterations", str(max_iterations)])
             if checkpoint != "None":
                 cmd.extend(["--checkpoint", checkpoint])
+            if random_seed:
+                cmd.extend(["--seed", "-1"])
             # Run the command in the specified workspace 
             cmd.append("--headless")
             # TODO: silence
@@ -221,7 +223,7 @@ def main():
             subprocess.run(["git", "checkout", "."], cwd=eval_workspace)
             rewardrules = r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward, reward_components'
             write_code_to_file(reward_func, task_config["env_cfg_path"], rewardrules)
-            return train_command(whichpython=whichpython, silence=True, log_name=log_name)
+            return train_command(whichpython=whichpython, silence=True, log_name=log_name, random_seed=True)
 
         # Eureka refinement
         # The refine record including:
