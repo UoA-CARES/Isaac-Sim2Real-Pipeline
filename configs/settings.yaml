@@ -1,0 +1,7 @@
+# taskconfig.yaml: Main task configuration
+# ----------------------------------------
+# workspace:
+# TODO: rearrange the lay out
+workspace: "/home/lee/code/isaactasks"
+python_env: /home/lee/anaconda3/envs/env_isaaclab/bin/python
+

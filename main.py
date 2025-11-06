@@ -76,6 +76,9 @@ def main():
     
     args = parser.parse_args()
 
+    # load settings.yaml
+    settings_yaml = load_yaml_config("configs/settings.yaml")
+
     # detect the existence of the task config, if not exist then error:
     if not args.taskconfig:
         print("Error: --taskconfig argument is required.")
@@ -83,7 +86,14 @@ def main():
 
     # Load task configuration
     task_yaml = load_yaml_config(args.taskconfig)
-    workspace = task_yaml.get('workspace')
+    # Build workspace path robustly using os.path.join, expanduser and abspath
+    root = settings_yaml.get('workspace') if settings_yaml else None
+    task_ws = task_yaml.get('workspace') if task_yaml else None
+    if not root or not task_ws:
+        print("Warning: 'workspace' missing in settings.yaml or taskconfig.yaml; attempting to join available parts.")
+    workspace = os.path.abspath(os.path.expanduser(os.path.join(root or '', task_ws or '')))
+    if not workspace:
+        raise ValueError("Error: unable to determine workspace from settings.yaml and taskconfig.yaml")
 
     task_config = {
         "workspace": workspace,
@@ -95,7 +105,7 @@ def main():
     # command parameters
     task = task_yaml.get('task')
     checkpoint = task_yaml.get('checkpoint') 
-    whichpython = task_yaml.get('python_env') 
+    whichpython = settings_yaml.get('python_env') 
     num_envs = task_yaml.get('num_envs')
     seed = task_yaml.get('seed')
     max_iterations = task_yaml.get('max_iterations')
@@ -124,6 +134,9 @@ def main():
                 cmd.extend(["--checkpoint", checkpoint])
             if random_seed:
                 cmd.extend(["--seed", "-1"])
+            else:
+                if seed != "None":
+                    cmd.extend(["--seed", str(seed)])
             # Run the command in the specified workspace 
             cmd.append("--headless")
             # TODO: silence
@@ -187,7 +200,7 @@ def main():
     if args.refine:
         # TODO: delete all the folder under: /home/lee/code/isaactasks/ant/logs/rl_games/ant_direct
         # Clear previous logs if running refinement
-        logs_dir = "/home/lee/code/isaactasks/ant/logs/rl_games/ant_direct"
+        logs_dir =  workspace + "logs/rl_games/ant_direct"
         if os.path.exists(logs_dir):
             print(f"Clearing previous logs at {logs_dir}")
             for item in os.listdir(logs_dir):
@@ -199,8 +212,8 @@ def main():
                     except Exception as e:
                         print(f"  Failed to delete {item}: {e}")
         # Run git checkout . under /home/lee/code/isaactasks
-        print("Running git checkout . under /home/lee/code/isaactasks")
-        subprocess.run(["git", "checkout", "."], cwd="/home/lee/code/isaactasks")
+        print(f"Running git checkout . under {settings_yaml.get('workspace')}")
+        subprocess.run(["git", "checkout", "."], cwd=settings_yaml.get('workspace'))
         
 
         # Eureka refinement
@@ -215,12 +228,11 @@ def main():
         # Read refine config parameters
         iteration = int(refine_config.get('iteration'))
         num_eval = int(refine_config.get('num_eval'))
-        eval_workspace = refine_config.get('workspace')
 
         # evaluation function code
-        def env_evaluation(reward_func, log_name):
+        def env_evaluation(reward_func, log_name, random_seed=False):
             # clear the workspace
-            subprocess.run(["git", "checkout", "."], cwd=eval_workspace)
+            subprocess.run(["git", "checkout", "."], cwd=workspace)
             rewardrules = r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward, reward_components'
             write_code_to_file(reward_func, task_config["env_cfg_path"], rewardrules)
             return train_command(whichpython=whichpython, silence=True, log_name=log_name, random_seed=True)
@@ -241,7 +253,7 @@ def main():
             print("evaluating...")
             best_eval = None
             for j in range(num_eval):
-                train_result = env_evaluation(reward_func, log_name=f"iter{i}_final_eval_{j}")
+                train_result = env_evaluation(reward_func, log_name=f"iter{i}_final_eval_{j}", random_seed=True)
                 if train_result is not None:
                     if not best_eval or best_eval['max_con_successes'] < train_result['max_con_successes']:
                         best_eval = train_result

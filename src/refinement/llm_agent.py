@@ -152,8 +152,10 @@ class EurekaAgent():
         while i < self.samples:
             # generate a new reward function string
             reward_func, raw_response = self.func_gen(self.messages)
+            print("The Reward func generated...")
             # test the generated reward function in the environment
             train_result = env_evaluation(reward_func, log_name=f"iter_{len(self.refine_record)}_sample{i}")
+            print("evaluated!!")
             # record it
             if train_result is not None:
                 self.refine_record[-1].append({
@@ -164,6 +166,7 @@ class EurekaAgent():
                     "feedback_path": os.path.join(train_result["log_path"], "training_record", "training_summary.txt")
                 })
                 i += 1
+            print("valid recorded!!")
         # Finding the best performance among samples
         best_idx = max(range(self.samples), key=lambda idx: self.refine_record[-1][idx]['train_result']['max_con_successes'])
         self.best_idx.append(best_idx)
