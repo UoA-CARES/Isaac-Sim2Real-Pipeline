@@ -33,17 +33,24 @@ Usage:
     * not shown on the prototype
 """
 
-
-# TODO: CKPT and store
-
 import os
-from matplotlib.pylab import sample
 import yaml
 import argparse
 import subprocess
+import logging
 from src.refinement.llm_agent import EurekaAgent
-from src.refinement.files_operation import load_env_cfg, load_prompts, write_code_to_file, read_tb, get_latest_checkpoint_dir, summarize_tensorboard
-import shutil
+from src.refinement.files_operation import load_env_cfg, load_prompts
+from src.evaluation import RewardEvaluator
+from src.utils.common import load_machine_pool
+from tqdm import tqdm
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 
 def load_yaml_config(config_path):
@@ -51,14 +58,16 @@ def load_yaml_config(config_path):
     try:
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
-        print(f"Successfully loaded configuration from: {config_path}")
+        logger.info(f"Successfully loaded configuration from: {config_path}")
         return config
     except FileNotFoundError:
-        print(f"Error: The file was not found at {config_path}")
+        logger.error(f"The file was not found at {config_path}")
         return None
     except yaml.YAMLError as e:
-        print(f"Error parsing YAML file {config_path}: {e}")
+        logger.error(f"Error parsing YAML file {config_path}: {e}")
         return None
+
+
 
 
 def main():
@@ -81,7 +90,7 @@ def main():
 
     # detect the existence of the task config, if not exist then error:
     if not args.taskconfig:
-        print("Error: --taskconfig argument is required.")
+        logger.error("--taskconfig argument is required")
         return
 
     # Load task configuration
@@ -90,7 +99,7 @@ def main():
     root = settings_yaml.get('workspace') if settings_yaml else None
     task_ws = task_yaml.get('workspace') if task_yaml else None
     if not root or not task_ws:
-        print("Warning: 'workspace' missing in settings.yaml or taskconfig.yaml; attempting to join available parts.")
+        logger.warning("'workspace' missing in settings.yaml or taskconfig.yaml; attempting to join available parts")
     workspace = os.path.abspath(os.path.expanduser(os.path.join(root or '', task_ws or '')))
     if not workspace:
         raise ValueError("Error: unable to determine workspace from settings.yaml and taskconfig.yaml")
@@ -105,212 +114,57 @@ def main():
     # command parameters
     task = task_yaml.get('task')
     checkpoint = task_yaml.get('checkpoint') 
-    whichpython = settings_yaml.get('python_env') 
+    whichpython = settings_yaml.get('python_env')
     num_envs = task_yaml.get('num_envs')
     seed = task_yaml.get('seed')
     max_iterations = task_yaml.get('max_iterations')
 
-    # if the workspace is the official IsaacLab, then cmd_head=["./isaaclab.sh", "-p", "scripts/reinforcement_learning/rl_games/train.py"]
-    # if workspace and workspace.rstrip('/').split('/')[-1] == "IsaacLab":
-    #     cmd_head = ["./isaaclab.sh", "-p", "scripts/reinforcement_learning/rl_games/train.py"]
-    # else:
-    # cmd_head = ["python scripts/reinforcement_learning/rl_games/train.py"]
- 
-    # simtrain, if simtrain is true, first access the workspace and run 
-    # simtrain
-    def train_command(whichpython="python", silence=False, log_name=None, random_seed=False):
-        try:
-            # OUTPUT: log_path (if None then the training is no sccusseful), consecutive successes, best checkpoint path
-            cmd_head = [whichpython, "scripts/rl_games/train.py"]
-            cmd = cmd_head + ["--task", task]
-
-            if num_envs != "None":
-                cmd.extend(["--num_envs", str(num_envs)])
-            if seed != "None":
-                cmd.extend(["--seed", str(seed)])
-            if max_iterations != "None":
-                cmd.extend(["--max_iterations", str(max_iterations)])
-            if checkpoint != "None":
-                cmd.extend(["--checkpoint", checkpoint])
-            if random_seed:
-                cmd.extend(["--seed", "-1"])
-            else:
-                if seed != "None":
-                    cmd.extend(["--seed", str(seed)])
-            # Run the command in the specified workspace 
-            cmd.append("--headless")
-            # TODO: silence
-
-            subprocess.run(cmd, cwd=workspace)
-            # Get the latest log path
-            log_path = get_latest_checkpoint_dir(logs_path=task_config["logs_path"])
-
-            if log_name is not None:
-                # Rename the log_path folder to log_name
-                new_log_path = os.path.join(os.path.dirname(log_path), log_name)
-                # if exist then delete the old one
-                if os.path.exists(new_log_path):
-                    shutil.rmtree(new_log_path) 
-                os.rename(log_path, new_log_path)
-                log_path = new_log_path
-
-            os.makedirs(os.path.join(log_path, "training_record"), exist_ok=True)
-            
-            tb_path = os.path.join(log_path, "summaries", os.listdir(os.path.join(log_path, "summaries"))[0])
-            # Summarize the tensorboard file for LLM analysis
-            summarize_tensorboard(tb_path, os.path.join(log_path, "training_record", "training_summary.txt"))
-            # Consecutive Successes
-            consecutive_successes_events = read_tb(tb_path, 'Episode/consecutive_successes')
-            max_con_successes = max(event.value for event in consecutive_successes_events)
-            
-            train_rest_dict = {
-                "log_path": log_path,
-                "max_con_successes": max_con_successes,
-                "tb_path": tb_path
-            }
-            return train_rest_dict
-
-        except Exception as e:
-            print(f"Error during training subprocess: {e}")
-            return None
-        
-
-    # play command
-    def play_command():
-        cmd_head_play = ["python", "scripts/rl_games/play.py"]
-        cmd = cmd_head_play + ["--task", task]
-        if num_envs is not None:
-            cmd.extend(["--num_envs", str(num_envs)])
-        if checkpoint is not None:
-            cmd.extend(["--checkpoint", checkpoint])
-        
-        subprocess.run(cmd, cwd=workspace)
-
-
-    if args.simtrain:
-        log_path, max_con_successes, tb_path = train_command(whichpython=whichpython, silence=False, log_name="testtest")
-        print(f"Training completed.")
-        print(f"  Log path: {log_path}")
-        print(f"  Max Consecutive Successes: {max_con_successes}")
-        print(f"  TensorBoard path: {tb_path}")
-
-    if args.simplay:
-        play_command()
-
     if args.refine:
-        # TODO: delete all the folder under: /home/lee/code/isaactasks/ant/logs/rl_games/ant_direct
-        # Clear previous logs if running refinement
-        logs_dir =  workspace + "logs/rl_games/ant_direct"
-        if os.path.exists(logs_dir):
-            print(f"Clearing previous logs at {logs_dir}")
-            for item in os.listdir(logs_dir):
-                item_path = os.path.join(logs_dir, item)
-                if os.path.isdir(item_path):
-                    try:
-                        shutil.rmtree(item_path)
-                        print(f"  Deleted: {item}")
-                    except Exception as e:
-                        print(f"  Failed to delete {item}: {e}")
-        # Run git checkout . under /home/lee/code/isaactasks
-        print(f"Running git checkout . under {settings_yaml.get('workspace')}")
-        subprocess.run(["git", "checkout", "."], cwd=settings_yaml.get('workspace'))
-        
-
-        # Eureka refinement
-        if not args.refineconfig:
-            print("Error: --refineconfig argument is required when --refine is set.")
-            return
+        logger.info(f"Loading refine configuration from {args.refineconfig}")
         refine_config = load_yaml_config(args.refineconfig)
-        if not refine_config:
-            print("Error: Failed to load refine configuration.")
-            return
-            
-        # Read refine config parameters
-        iteration = int(refine_config.get('iteration'))
-        num_eval = int(refine_config.get('num_eval'))
 
-        # evaluation function code
-        def env_evaluation(reward_func, log_name, random_seed=False):
-            # clear the workspace
-            subprocess.run(["git", "checkout", "."], cwd=workspace)
-            rewardrules = r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward, reward_components'
-            write_code_to_file(reward_func, task_config["env_cfg_path"], rewardrules)
-            return train_command(whichpython=whichpython, silence=True, log_name=log_name, random_seed=True)
+        logger.info("Initializing environment and LLM agents")
+        subprocess.run(["git", "checkout", "."], cwd=settings_yaml.get('workspace'))
 
-        # Eureka refinement
-        # The refine record including:
-        # refine_record = [[{"ckpt": None, "max_con_successes": None, "tb_path": None} for _ in range(sample)] for _ in range(iteration)]
-        # refine_record = [list() for _ in range(iteration)]
-        # Init prompts
-        # env_cfg_dict = load_env_cfg(env_cfg_path)
         # Init LLM agents
         llm_agent = EurekaAgent(task_config=task_config, agent_config=refine_config.get('agent', {}))
+
+        # Load machine pool
+        machine_pool = load_machine_pool()
+
+        # Initialize RewardEvaluator
+        logger.info("Initializing RewardEvaluator")
+        evaluator = RewardEvaluator(
+            task_config=task_config,
+            settings_config=settings_yaml,
+            machine_pool=machine_pool
+        )
+
         # Run refinement loop
+        logger.info("Starting refinement loop")
+        logs = []
+        iteration = int(refine_config.get('iteration'))
         for i in range(1, iteration+1):
-            print(f"Refinement iteration {i}/{iteration}")
-            print("onemoving...")
-            reward_func = llm_agent.one_move(env_evaluation)
-            print("evaluating...")
-            best_eval = None
-            for j in range(num_eval):
-                train_result = env_evaluation(reward_func, log_name=f"iter{i}_final_eval_{j}", random_seed=True)
-                if train_result is not None:
-                    if not best_eval or best_eval['max_con_successes'] < train_result['max_con_successes']:
-                        best_eval = train_result
-                print(f"Evaluation result {i}: Max consecutive successes: {best_eval['max_con_successes']}")
+            logger.info(f"Refinement iteration {i}/{iteration}")
+            logger.info("Generating reward functions with LLM")
+            # Generate reward functions using LLM agent
+            reward_func_list = []
+            raw_response_list = []
+
+            for _ in tqdm(range(llm_agent.samples), desc="Generating reward functions"):
+                reward_func, raw_response = llm_agent.func_gen(llm_agent.messages)
+                reward_func_list.append(reward_func)
+                raw_response_list.append(raw_response)
+
+            logger.info("Evaluating reward functions")
+            best_eval = evaluator.evaluate(reward_func_list, logs=logs, task_yaml=task_yaml)
+
+            if best_eval:
+                logger.info(f"Max consecutive successes: {best_eval['max_con_successes']}")
                 llm_agent.receive_feedback(best_eval)
-
-
-
-
-
-
-
-            # for respond_id in range(sample):
-            #     # Sample new reward functions
-            #     reward_func, raw_response = llm_agent.func_gen()
-            #     # clear the workspace
-            #     subprocess.run(["git", "checkout", "."], cwd="/home/lee/code/isaactasks")
-            #     print(f"  Sample {respond_id+1}/{sample}: Generated new reward function.")
-            #     # Write the new reward function to the environment config path
-            #     rewardrules = r'@torch\.jit\.script\s*\n*def\s+compute_rewards\s*\([^)]*\).*?return\s+total_reward, reward_components'
-            #     write_code_to_file(reward_func, env_cfg_path, rewardrules)
-            #     # train the new reward function in sim
-            #     log_path, max_con_successes, tb_path = train_command(whichpython=whichpython, silence=True, log_name=f"iter{i+1}_sample{respond_id+1}")
-            #     # Check the successfulness
-            #     if log_path is None:
-            #         print(f"  Sample {respond_id}: Training failed, skipping...")
-            #         summary_path = ""
-                
-            #     # record the result
-            #     summary_path = os.path.join(log_path, "training_record", "training_summary.txt")
-            #     refine_record[i].append({
-            #         'ckpt': log_path,
-            #         'max_con_successes': max_con_successes,
-            #         'tb_path': tb_path,
-            #         'prompt': llm_agent.messages,
-            #         'reward_func': reward_func,
-            #         "responses_content": raw_response,
-            #         "feedback_path": summary_path
-            #     })
-
-            # # Find the best max_con_successes in this iteration
-            # best_idx = max(range(sample), key=lambda idx: refine_record[i][idx]['max_con_successes'])
-            # # Print the best result
-            # best_success = refine_record[i][best_idx]['max_con_successes']
-            # print(f"  Best consecutive successes in iteration {i+1}: {best_success} (sample {best_idx})")
-            
-            # # If all the samples are failed, then re-run it for this iteration
-            # if all(record['ckpt'] is None for record in refine_record[i]):
-            #     print(f"  All samples failed in iteration {i+1}. Re-running this iteration...")
-            #     refine_record[i] = list()
-            #     continue
-            # else:
-            #     i += 1  # Only increment if at least one sample succeeded
-
-            # # Adding the feedback into the llm_agent
-            # if i < iteration:  # No need to prepare prompts for the next iteration if this was the last one
-            #     llm_agent.add_feedback(refine_record[i-1][best_idx])
+            else:
+                logger.error("Evaluation failed, stopping refinement loop")
+                break
 
 if __name__ == "__main__":
     main()
