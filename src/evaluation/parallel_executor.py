@@ -148,12 +148,12 @@ class ParallelExecutor:
 
         cmd = [
             run_script,
-            task_params.get('task_name', 'Template-Task'),
-            task_params.get('task_folder', 'default_task'),
+            task_params.get('task_name'),
+            task_params.get('task_folder'),
             task_params.get('docker_name', 'isaac'),
-            task_params.get('logs_folder', 'logs/rl_games/default'),
+            task_params.get('logs_folder'),
             task_params.get('training_config', ''),
-            task_params.get('local_workspace', ''),
+            task_params.get('local_workspace'),
             task_params.get('workspace_dir', '${HOME}/.temp_isaac'),
             task.machine
         ]
@@ -184,9 +184,15 @@ class ParallelExecutor:
             cmd,
             cwd=self.docker_dir,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
         )
+        
+        # Stream output in real-time
+        if proc.stdout:
+            for line in proc.stdout:
+                print(f"[Task {task.idx}] {line.rstrip()}")
 
         task.status = TaskStatus.RUNNING
         return proc

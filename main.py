@@ -62,10 +62,10 @@ def load_yaml_config(config_path):
         return config
     except FileNotFoundError:
         logger.error(f"The file was not found at {config_path}")
-        return None
+        raise
     except yaml.YAMLError as e:
         logger.error(f"Error parsing YAML file {config_path}: {e}")
-        return None
+        raise
 
 
 
@@ -85,16 +85,11 @@ def main():
     
     args = parser.parse_args()
 
-    # load settings.yaml
+    # Setting Configurations: The localised workspace and python envionment
     settings_yaml = load_yaml_config("configs/settings.yaml")
-
-    # detect the existence of the task config, if not exist then error:
-    if not args.taskconfig:
-        logger.error("--taskconfig argument is required")
-        return
-
     # Load task configuration
     task_yaml = load_yaml_config(args.taskconfig)
+    
     # Build workspace path robustly using os.path.join, expanduser and abspath
     root = settings_yaml.get('workspace') if settings_yaml else None
     task_ws = task_yaml.get('workspace') if task_yaml else None
@@ -103,6 +98,7 @@ def main():
     workspace = os.path.abspath(os.path.expanduser(os.path.join(root or '', task_ws or '')))
     if not workspace:
         raise ValueError("Error: unable to determine workspace from settings.yaml and taskconfig.yaml")
+    logger.info(f"Successfully determined local workspace: {workspace}")
 
     task_config = {
         "workspace": workspace,
@@ -112,12 +108,12 @@ def main():
     }
 
     # command parameters
-    task = task_yaml.get('task')
-    checkpoint = task_yaml.get('checkpoint') 
-    whichpython = settings_yaml.get('python_env')
-    num_envs = task_yaml.get('num_envs')
-    seed = task_yaml.get('seed')
-    max_iterations = task_yaml.get('max_iterations')
+    # task = task_yaml.get('task')
+    # checkpoint = task_yaml.get('checkpoint') 
+    # whichpython = settings_yaml.get('python_env')
+    # num_envs = task_yaml.get('num_envs')
+    # seed = task_yaml.get('seed')
+    # max_iterations = task_yaml.get('max_iterations')
 
     if args.refine:
         logger.info(f"Loading refine configuration from {args.refineconfig}")

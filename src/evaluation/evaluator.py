@@ -75,7 +75,7 @@ class RewardEvaluator:
         # Auto-detect docker_dir if not provided
         if docker_dir is None:
             # Assume docker/ is in the project root (same level as main.py)
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            project_root = settings_config["workspace"]
             docker_dir = os.path.join(project_root, "docker")
 
         if not os.path.exists(docker_dir):
@@ -253,13 +253,13 @@ class RewardEvaluator:
             task_yaml = {}
 
         params = {
-            'task_name': task_yaml.get('task', 'Template-Task'),
-            'task_folder': task_yaml.get('task_folder', 'default_task'),
+            'task_name': task_yaml.get('task'),
+            'task_folder': task_yaml.get('workspace'),
             'docker_name': task_yaml.get('docker_name', 'isaac'),
             'logs_folder': task_yaml.get('logs_path', 'logs/rl_games/default'),
-            'training_config': task_yaml.get('checkpoint', ''),
-            'local_workspace': self.settings_config.get('workspace', ''),
-            'workspace_dir': task_yaml.get('remote_workspace', '${HOME}/.temp_isaac'),
+            'training_config': task_yaml.get('config', ''),
+            'local_workspace': self.settings_config.get('workspace'),
+            'workspace_dir': os.path.expandvars(task_yaml.get('remote_workspace', '${HOME}/.temp_isaac')),
         }
 
         return params
