@@ -42,7 +42,7 @@ One refinement iteration:
 
 This repeats every iteration, not just once at the end — each iteration both scores a winner and hands its checkpoint forward. Total trainings per task = `iteration * (sample + num_eval)`.
 
-**Reward components stay observable.** This is Eureka's central mechanism. Because `compute_reward` returns its components alongside the total, the task layer logs each one to TensorBoard, and each iteration's feedback shows the LLM the training trajectory of every component it wrote — so it can rescale, rewrite, or discard them on evidence rather than guesswork. The framework does that logging in `_get_rewards`, a fixed hook ARD never rewrites, so no candidate can drop it.
+**Reward components stay observable.** This is Eureka's central mechanism. Because `compute_reward` returns its components alongside the total, the task layer logs each one to TensorBoard, and each iteration's feedback shows the LLM how every component it wrote behaved over training — so it can rescale, rewrite, or discard them on evidence rather than guesswork. The framework does that logging in `_get_rewards`, a fixed hook ARD never rewrites, so no candidate can drop it.
 
 The evaluation metric is **isolated in the task layer**: it lives in each task's `_get_dones`, not in `compute_reward`, so the LLM can rewrite the reward freely without ever altering the scoreboard it is judged on. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the injection mechanism and design rationale.
 

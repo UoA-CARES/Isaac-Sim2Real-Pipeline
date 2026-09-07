@@ -156,19 +156,6 @@ class ResultProcessor:
         training.sort(key=lambda t: (order.get(t, len(order)), t))
         return reward, evaluation, training
 
-    @staticmethod
-    def sample_trajectory(values: np.ndarray, points: int) -> np.ndarray:
-        """Return ``values`` thinned to about ``points`` evenly spaced readings.
-
-        Eureka shows the LLM the value *trajectory* over training, not just summary
-        statistics: "this component was flat the whole run" and "this component
-        saturated after 20% of training" have the same mean but call for different
-        fixes. Sampling every ``len // points`` readings keeps that shape legible
-        without pasting a thousand numbers into the prompt.
-        """
-        step = max(len(values) // points, 1)
-        return values[::step]
-
     def summarise_tensorboard(self, event_file_path: str, output_txt_path: str):
         """Write a human-readable summary of the selected scalars, for LLM feedback.
 
@@ -210,7 +197,7 @@ class ResultProcessor:
             logger.error(f"Error summarizing TensorBoard file: {e}")
 
     def _summarise_tag(self, acc, tag: str) -> list:
-        """Render one scalar's trajectory, statistics, and trend as summary lines."""
+        """Render one scalar's statistics and trend as summary lines."""
         values = np.array([e.value for e in acc.Scalars(tag)])
         if len(values) == 0:
             return []
@@ -220,12 +207,9 @@ class ResultProcessor:
         initial_perf = np.mean(values[:initial_idx])
         mid_perf = values[mid_idx]
         final_perf = np.mean(values[-initial_idx:])
-        trajectory = self.sample_trajectory(values, config.FEEDBACK_TRAJECTORY_POINTS)
 
         return [
             f"## Metric: {tag}\n",
-            f"- **Trajectory** ({len(values)} epochs, sampled): "
-            f"[{', '.join(f'{v:.4f}' for v in trajectory)}]\n",
             "- **Overall Statistics:**",
             f"  - Mean: {np.mean(values):.4f}",
             f"  - Std Dev: {np.std(values):.4f} (Measures stability/variance)",

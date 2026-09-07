@@ -29,11 +29,6 @@ REWARD_SCALAR_PREFIX = "components_"
 # The aggregate reward's scalar name (Eureka's ``gpt_reward``).
 REWARD_TOTAL_METRIC = REWARD_SCALAR_PREFIX + "total"
 
-# How many points of a scalar's training trajectory to show the LLM as feedback.
-# Eureka samples every ``max(len//10, 1)`` epochs; matching that keeps the
-# feedback a readable trend rather than a wall of numbers.
-FEEDBACK_TRAJECTORY_POINTS = 10
-
 # --------------------------------------------------------------------------- #
 # What goes into the LLM feedback summary                                      #
 # --------------------------------------------------------------------------- #

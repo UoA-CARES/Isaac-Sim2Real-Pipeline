@@ -26,6 +26,13 @@ logger = logging.getLogger(__name__)
 # response offering one is not accepted as a proposal.
 COMPUTE_REWARD_RE = re.compile(r"def\s+compute_reward\s*\(\s*self\b", re.DOTALL)
 
+# Used when an iteration failed and no per-candidate reason was captured. A concrete
+# reason is always preferable — see `receive_feedback`'s `failure_msg`.
+GENERIC_FAILURE_MSG = (
+    "No reward function trained successfully this iteration, and the reason was not "
+    "captured. Rewrite an entirely new reward function."
+)
+
 # Code-block extraction patterns, most-specific first.
 _CODE_PATTERNS = [
     r"```python(.*?)```",
@@ -87,18 +94,33 @@ class EurekaAgent:
             {"role": "user", "content": user_content},
         ]
 
-    def receive_feedback(self, best_response_text: str, summary_path: str = None) -> str:
+    def receive_feedback(
+        self,
+        best_response_text: str,
+        summary_path: str = None,
+        failure_msg: str = None,
+    ) -> str:
         """
         Fold the previous iteration's outcome into the conversation.
 
-        The summary carries each reward component's training trajectory (logged as
-        ``Episode/components_*`` by the task layer), which is what the code-feedback tips
-        ask the LLM to reason over before it rewrites anything.
+        Two feedback paths, as in Eureka. A candidate that *trained* gets the policy
+        summary: each reward component's statistics and trend (logged as
+        ``Episode/components_*`` by the task layer), which is what the code-feedback
+        tips ask the LLM to reason over before it rewrites anything. A candidate that
+        *failed* gets the reason it failed, so the next attempt can fix it rather than
+        repeat it.
 
         Args:
-            best_response_text: Raw LLM response that produced the best run.
+            best_response_text: Raw LLM response that produced the best run — or, when
+                the whole iteration failed, one of the failed candidates' responses.
             summary_path: Path to that run's training_summary.txt, or None if the
-                iteration failed entirely (signals a hard reset).
+                iteration failed entirely.
+            failure_msg: Why that same candidate failed (its ``eval_error``), used only
+                when ``summary_path`` is absent. It must describe the candidate whose
+                code is being shown as ``best_response_text``: the LLM is about to see
+                its own code next to this reason, and pairing code with another
+                candidate's error would send it after the wrong bug. Falls back to a
+                generic rewrite request when the reason was not captured.
 
         Returns:
             The exact feedback message text appended to the conversation (so the
@@ -116,8 +138,7 @@ class EurekaAgent:
             )
         else:
             feedback_content = self.prompts["execution_error_feedback"].format(
-                traceback_msg="No reward function trained successfully this "
-                "iteration. Rewrite an entirely new reward function."
+                traceback_msg=failure_msg or GENERIC_FAILURE_MSG
             )
         feedback_content += self.code_output_tip
 

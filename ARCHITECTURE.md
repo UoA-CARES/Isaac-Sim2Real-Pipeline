@@ -59,7 +59,7 @@ as `components_total`. IsaacLab's rl_games wrapper renames `log` -> `episode`, a
 rl_games' `IsaacAlgoObserver` writes each key to TensorBoard as `Episode/components_<name>`.
 
 ARD reads those scalars back out in `ResultProcessor.summarise_tensorboard` and
-shows each one's training trajectory to the LLM as feedback. That summary is a
+shows each one's statistics and trend over training to the LLM as feedback. That summary is a
 *selection*, not a dump of the event file: rl_games writes ~30 scalars per run, and
 pasting the optimiser internals (`a_loss`, `kl`, `e_clip`, the `performance/*` group,
 the `/step` and `/time` duplicates) into every message would spend context on noise
@@ -165,7 +165,7 @@ continuous `--refine` invocation, not across separate runs.
 - `evaluation/hpc_runner.py` — `HPCRunner`: builds + pushes each candidate's image and drives the CARES scheduler (`submit`/`poll`/`collect`).
 - `evaluation/reward_injection.py` — AST splice of `compute_reward` (+ two-output validation).
 - `evaluation/workspace_manager.py` — builds per-candidate job codebases.
-- `evaluation/result_processor.py` — reads the job's logs in place, writes the scalar summary (reward components first, each with its training trajectory).
+- `evaluation/result_processor.py` — reads the job's logs in place, writes the scalar summary (reward components first, each with its statistics and trend).
 - `evaluation/scorer.py` — `FitnessScorer`: reads `fitness_function`, ranks candidates, summarises eval seeds.
 - `evaluation/evaluator.py` — `RewardEvaluator`, the dispatch + capture orchestrator.
 - `refinement/llm_agent.py` — `EurekaAgent` (proposes `compute_reward`, folds in feedback).
