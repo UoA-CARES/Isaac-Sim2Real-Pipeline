@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Lifecycle status values, in rough order of progression.
 STATUS_PENDING = "pending"          # record created, nothing attempted yet
-STATUS_GENERATED = "generated"      # LLM produced a valid _get_rewards method
+STATUS_GENERATED = "generated"      # LLM produced a valid compute_reward method
 STATUS_GEN_FAILED = "gen_failed"    # LLM never produced a valid method
 STATUS_BUILD_FAILED = "build_failed"   # reward injection / codebase build failed
 STATUS_SUBMITTED = "submitted"      # dispatched to the HPC scheduler, awaiting result
@@ -65,7 +65,7 @@ class RewardRecord:
     temperature: Optional[float] = None
     gen_seed: Optional[int] = None       # LLM sampler seed for this candidate
     raw_response: Optional[str] = None   # verbatim LLM completion
-    reward_method: Optional[str] = None  # extracted _get_rewards source
+    reward_method: Optional[str] = None  # extracted compute_reward source
     gen_error: Optional[str] = None      # why generation failed, if it did
 
     # --- dispatch / evaluation (local runner / hpc scheduler) ---------------

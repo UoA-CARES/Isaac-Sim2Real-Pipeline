@@ -3,7 +3,8 @@
 Entry point for the ARD (Autonomous RL Designer) reward-refinement pipeline.
 
 Stage 2 — Automated reward refinement (Eureka-style):
-  1. An LLM proposes complete `_get_rewards` methods for an ard-isaaclab-tasks env.
+  1. An LLM proposes complete `compute_reward` methods for an ard-isaaclab-tasks env,
+     each returning (total_reward, reward_components).
   2. Each candidate is spliced into a fresh copy of the task repo (AST injection)
      and built + run as a local docker job (PPO / rl_games), one at a time.
   3. Finished jobs are scored by the task's fixed `fitness_function` metric; the

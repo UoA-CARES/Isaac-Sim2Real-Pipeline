@@ -1,10 +1,14 @@
 """
 LLM Agent for autonomous reward design (Eureka-style).
 
-The agent proposes complete ``_get_rewards(self)`` methods for an ard-isaaclab-tasks
+The agent proposes complete ``compute_reward(self)`` methods for an ard-isaaclab-tasks
 environment, then iterates on them using training feedback (per-component scalar
 trends + the fixed ``fitness_function`` evaluation metric). The proposed method is
 spliced into the task env via AST and dispatched for training by the evaluator.
+
+``compute_reward`` returns two things — the total reward and a dict of its named
+components — which is what closes the loop: the task layer logs every component to
+TensorBoard, and the next iteration's feedback shows the LLM what each one did.
 """
 
 import re
@@ -17,8 +21,10 @@ from src.refinement.files_operation import load_prompts
 
 logger = logging.getLogger(__name__)
 
-# A valid proposal must define a `_get_rewards(self ...)` method.
-GET_REWARDS_RE = re.compile(r"def\s+_get_rewards\s*\(\s*self\b", re.DOTALL)
+# A valid proposal must define a `compute_reward(self ...)` method — the ARD edit
+# target. `_get_rewards` is a fixed framework hook the LLM must not rewrite, so a
+# response offering one is not accepted as a proposal.
+COMPUTE_REWARD_RE = re.compile(r"def\s+compute_reward\s*\(\s*self\b", re.DOTALL)
 
 # Code-block extraction patterns, most-specific first.
 _CODE_PATTERNS = [
@@ -33,7 +39,7 @@ class EurekaAgent:
 
     Args:
         task_description: Natural-language description of the task goal.
-        reward_template: Pristine ``_get_rewards`` source (shown as inspiration).
+        reward_template: Pristine ``compute_reward`` source (the contract to fill in).
         env_source: Full task env-class source (LLM task context).
         agent_config: {model, base_url, sample, temperature?}.
     """
@@ -85,6 +91,10 @@ class EurekaAgent:
         """
         Fold the previous iteration's outcome into the conversation.
 
+        The summary carries each reward component's training trajectory (logged as
+        ``Episode/components_*`` by the task layer), which is what the code-feedback tips
+        ask the LLM to reason over before it rewrites anything.
+
         Args:
             best_response_text: Raw LLM response that produced the best run.
             summary_path: Path to that run's training_summary.txt, or None if the
@@ -127,7 +137,7 @@ class EurekaAgent:
 
         ``seed`` varies the sampler per candidate so identical prompts no longer
         collapse to identical completions (and stays reproducible). Retries until a
-        response contains a valid ``_get_rewards`` method.
+        response contains a valid ``compute_reward`` method.
         """
         max_retries = 10
         for attempt in range(1, max_retries + 1):
@@ -144,22 +154,22 @@ class EurekaAgent:
                 code = self._extract_method(response)
                 if code is not None:
                     return code, response
-                logger.warning(f"Attempt {attempt}: no valid _get_rewards in response")
+                logger.warning(f"Attempt {attempt}: no valid compute_reward in response")
             except Exception as e:  # noqa: BLE001 - surface API/transport errors and retry
                 logger.warning(f"Attempt {attempt} failed: {e}")
         raise RuntimeError(
-            "Failed to generate a valid _get_rewards method after 10 attempts."
+            "Failed to generate a valid compute_reward method after 10 attempts."
         )
 
     @staticmethod
     def _extract_method(response: str):
-        """Pull the first fenced code block that defines a _get_rewards method."""
+        """Pull the first fenced code block that defines a compute_reward method."""
         for pattern in _CODE_PATTERNS:
             for match in re.findall(pattern, response, re.DOTALL):
                 block = match.strip()
-                if GET_REWARDS_RE.search(block):
+                if COMPUTE_REWARD_RE.search(block):
                     return block
         # Fall back to the raw response if it itself is a bare method.
-        if GET_REWARDS_RE.search(response):
+        if COMPUTE_REWARD_RE.search(response):
             return response.strip()
         return None
