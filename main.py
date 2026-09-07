@@ -5,10 +5,12 @@ Entry point for the ARD (Autonomous RL Designer) reward-refinement pipeline.
 Stage 2 — Automated reward refinement (Eureka-style):
   1. An LLM proposes complete `_get_rewards` methods for an ard-isaaclab-tasks env.
   2. Each candidate is spliced into a fresh copy of the task repo (AST injection)
-     and built + run as a local docker job (PPO / rl_games), one at a time.
-  3. Finished jobs are scored by the task's fixed `fitness_function` metric. The
-     top `survivors` candidates (pool + batch) become the next round's parents,
-     each improved in its own conversation branch from its own training summary.
+     and trained `repeats` times, each on its own seed, as docker jobs.
+  3. Finished jobs are scored by the task's fixed `fitness_function` metric, and a
+     candidate's fitness is the trimmed mean of its repeats (highest and lowest
+     discarded), so one lucky training cannot win the batch. The top `survivors`
+     candidates (pool + batch) become the next round's parents, each improved in
+     its own conversation branch from its own training summary.
   4. After the search loop, the best candidate of the whole run is re-trained on
      `num_eval` seeds once, and reported as mean +/- std over those seeds.
 
@@ -89,6 +91,20 @@ def resolve_task_config(task_name, tasks_repo):
     )
 
 
+def trial_seed(base_seed, iteration, index, repeat):
+    """RL training seed for one repeated training of one candidate.
+
+    Distinct along every axis that has to stay independent: the outer run
+    (``base_seed``), the iteration, the candidate, and the repeat. Search jobs
+    used to pass no seed at all, so every one of them fell back to the seed
+    pinned in the task's own ``rl_games_ppo_cfg.yaml`` — repeats of a candidate
+    would have trained on identical RNG and there would be nothing to trim.
+
+    Valid while ``repeat < 10``, ``index < 1000`` and ``iteration < 100``.
+    """
+    return base_seed * 1_000_000 + iteration * 10_000 + index * 10 + repeat
+
+
 def run_refinement(settings, task_cfg, refine_cfg):
     """Run the Eureka refinement loop for one task."""
     tasks_repo = settings["tasks_repo"]
@@ -117,6 +133,7 @@ def run_refinement(settings, task_cfg, refine_cfg):
     num_eval = int(refine_cfg.get("num_eval", 1))
     base_seed = int(refine_cfg.get("base_seed", 0))
     survivors = max(1, int(refine_cfg.get("survivors", 1)))
+    repeats = max(1, int(refine_cfg.get("repeats", 1)))
     max_workers = min(agent.samples, int(refine_cfg.get("max_workers", agent.samples)))
 
     # The single source of truth: every candidate's generation -> evaluation ->
@@ -185,10 +202,33 @@ def run_refinement(settings, task_cfg, refine_cfg):
 
         run_records = history.for_iteration(i, phase="run")
 
+        # --- Trial phase: train each candidate `repeats` times ---------------
+        # One record per training job, each on its own RL seed. A candidate
+        # measured once is ranked on a single noisy run, so the batch winner is
+        # partly the best reward and partly the luckiest seed; the repeats give
+        # `aggregate_trials` something to trim before the ranking happens. The
+        # trials deliberately carry no `raw_response` — the candidate owns it,
+        # and copying it per repeat would treble the size of the history file.
+        trial_records = [
+            history.new_record(
+                iteration=i, index=r.index * repeats + j, phase="trial",
+                tag=f"{r.tag}_rep{j}", candidate_tag=r.tag, repeat=j,
+                seed=trial_seed(base_seed, i, r.index, j),
+                model=r.model, temperature=r.temperature, gen_seed=r.gen_seed,
+                reward_method=r.reward_method, status=STATUS_GENERATED,
+            )
+            for r in run_records if r.has_method
+            for j in range(repeats)
+        ]
+
         # --- Run phase: dispatch + capture (evaluator), then judge (scorer) --
-        logger.info(f"Evaluating {sum(r.has_method for r in run_records)} candidate(s)")
-        evaluator.evaluate(run_records)
-        scorer.score_all(run_records)
+        logger.info(
+            f"Evaluating {sum(r.has_method for r in run_records)} candidate(s) "
+            f"x {repeats} repeat(s) = {len(trial_records)} training(s)"
+        )
+        evaluator.evaluate(trial_records)
+        scorer.score_all(trial_records)
+        scorer.aggregate_trials(run_records, trial_records)
         best = scorer.select_best(run_records)
 
         if best is None:

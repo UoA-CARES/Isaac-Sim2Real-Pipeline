@@ -35,11 +35,11 @@ One refinement iteration:
 
 1. **Generate.** The LLM proposes `sample` candidate `_get_rewards(self)` methods.
 2. **Inject.** Each candidate is spliced into a fresh copy of `ard-isaaclab-tasks` via AST and packed into a `.tar.gz` codebase.
-3. **Run.** Each codebase (with its `Dockerfile`) is trained according to `runner.backend`: the local backend builds and `docker run`s each candidate in turn; the HPC backend builds, pushes, and submits the whole batch to the CARES scheduler and trains it concurrently. Either way the task is selected via the job's config (`TASK`, plus `SEED` for eval runs).
-4. **Score.** Each finished job's `logs/` are read from its work dir; each is scored by its `fitness_function` (from the training TensorBoard logs).
+3. **Run.** Each candidate is trained `repeats` times, each training on its own seed, according to `runner.backend`: the local backend builds and `docker run`s each training in turn; the HPC backend builds, pushes, and submits the whole batch to the CARES scheduler and trains it concurrently. Either way the job's config carries the task and the seed (`TASK`, `SEED`).
+4. **Score.** Each finished job's `logs/` are read from its work dir and scored by its `fitness_function` (from the training TensorBoard logs). A candidate's fitness is then the **trimmed mean** of its `repeats` trainings, with the highest and the lowest discarded — at the default `repeats: 3`, the middle run. A candidate measured once would be ranked on a single noisy training, so the batch winner would be partly the best reward and partly the luckiest seed.
 5. **Feed back.** The best candidate's own training summary is fed back to the LLM to inform the next iteration.
 
-After the last iteration (once per run, not once per iteration): the best candidate across **all** iterations is retrained on `num_eval` seeds and reported as mean ± std over them. Total trainings per task = `iteration * sample + num_eval`.
+After the last iteration (once per run, not once per iteration): the best candidate across **all** iterations is retrained on `num_eval` seeds and reported as mean ± std over them. Total trainings per task = `iteration * sample * repeats + num_eval`.
 
 The evaluation metric is **isolated in the task layer**: it lives in each task's `_get_dones`, not `_get_rewards`, so the LLM can rewrite the reward freely without ever altering the scoreboard it is judged on. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the injection mechanism and design rationale.
 

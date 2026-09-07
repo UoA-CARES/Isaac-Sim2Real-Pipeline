@@ -79,6 +79,69 @@ class FitnessScorer:
 
     # ---------------------------------------------------------------- ranking
     @staticmethod
+    def aggregate_trials(candidates: List, trials: List) -> List:
+        """
+        Fold each candidate's repeated trainings into the one fitness that ranks it.
+
+        A candidate trained once is ranked on a single noisy number, so the batch
+        winner is partly the best reward and partly the luckiest RL seed. Each
+        candidate is instead trained ``repeats`` times on different seeds and
+        scored by the **trimmed mean** of those runs: the highest and the lowest
+        are discarded and the rest averaged. At the usual ``repeats: 3`` that is
+        exactly the middle run. Fewer than three scored trials cannot be trimmed
+        (nothing would be left), so they are averaged as they stand.
+
+        The candidate also inherits the artifacts of whichever trial landed
+        nearest that aggregate, so the training summary fed back to the LLM comes
+        from a run that actually scored what the candidate was ranked on, rather
+        than from its luckiest attempt.
+
+        Mutates each candidate in place (``fitness``, ``trial_fitnesses``,
+        ``status`` and the captured paths) and returns ``candidates``.
+        """
+        by_candidate = {}
+        for trial in trials:
+            by_candidate.setdefault(trial.candidate_tag, []).append(trial)
+
+        for candidate in candidates:
+            if not candidate.has_method:
+                continue          # generation failed; there was nothing to train
+            group = by_candidate.get(candidate.tag, [])
+            scored = sorted(
+                (t for t in group if isfinite(t.fitness)), key=lambda t: t.fitness
+            )
+            candidate.trial_fitnesses = [t.fitness for t in scored]
+
+            if not scored:
+                candidate.fitness = float("-inf")
+                if group:
+                    # Carry up why it was never measured, so the history
+                    # distinguishes a bad reward from a job that never ran.
+                    candidate.status = group[0].status
+                    candidate.eval_error = (
+                        f"no fitness from {len(group)} trial(s); first: "
+                        f"{group[0].eval_error or group[0].status}"
+                    )
+                logger.warning(f"[{candidate.tag}] no trial produced a fitness")
+                continue
+
+            kept = scored[1:-1] if len(scored) >= 3 else scored
+            candidate.fitness = fmean(t.fitness for t in kept)
+            representative = min(
+                scored, key=lambda t: abs(t.fitness - candidate.fitness)
+            )
+            candidate.status = representative.status
+            candidate.log_path = representative.log_path
+            candidate.tb_path = representative.tb_path
+            candidate.summary_path = representative.summary_path
+            logger.info(
+                f"[{candidate.tag}] fitness {candidate.fitness:.4f} from "
+                f"{len(scored)}/{len(group)} trial(s) "
+                f"[{', '.join(f'{t.fitness:.4f}' for t in scored)}]"
+            )
+        return candidates
+
+    @staticmethod
     def select_best(records: List):
         """
         Mark and return the highest-fitness record in ``records``.

@@ -36,7 +36,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TASK = "Isaac-ARD-Repose-Cube-Shadow-Direct-v0"
-DEFAULT_SEEDS = [50]
+DEFAULT_SEEDS = [42,43,44,45,46]
 
 logging.basicConfig(
     level=logging.INFO,

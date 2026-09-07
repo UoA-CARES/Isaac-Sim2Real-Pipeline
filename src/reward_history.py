@@ -51,15 +51,23 @@ STATUS_NO_METRICS = "no_metrics"    # job ran but left no usable TensorBoard log
 
 @dataclass
 class RewardRecord:
-    """The full lifecycle of one reward candidate (one training job)."""
+    """The full lifecycle of one reward candidate, or one training job of one.
+
+    A ``run`` record is a candidate: the reward the LLM proposed, and the fitness
+    it was finally judged on. A ``trial`` record is one of that candidate's
+    repeated trainings, and names its candidate in ``candidate_tag``.
+    """
 
     # --- identity -----------------------------------------------------------
     iteration: int                       # 1-based refinement iteration
     index: int                           # position within this batch
-    phase: str                           # "run" (exploration) | "eval" (scoring)
+    phase: str                           # "run" (a candidate) | "trial" (one of its
+                                         # repeated trainings) | "eval" (scoring)
     tag: str                             # unique label, e.g. "iter1_run_0"
     seed: Optional[int] = None           # training seed, if pinned
     parent_tag: Optional[str] = None     # survivor whose branch produced this one
+    candidate_tag: Optional[str] = None  # trial only: the run record it trains
+    repeat: Optional[int] = None         # trial only: which repeat, 0-based
 
     # --- generation (LLM) ---------------------------------------------------
     model: Optional[str] = None
@@ -81,6 +89,8 @@ class RewardRecord:
 
     # --- judgement (fitness scorer) -----------------------------------------
     fitness: float = field(default_factory=lambda: float("-inf"))
+    trial_fitnesses: Optional[List[float]] = None  # run only: every repeat's score,
+                                         # ascending — what `fitness` was trimmed from
     selected_best: bool = False          # chosen as the batch winner
     survived: bool = False               # was ever kept in the top-K parent pool
     feedback_text: Optional[str] = None  # exact feedback sent to the LLM

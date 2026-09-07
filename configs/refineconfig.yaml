@@ -1,6 +1,14 @@
 # Eureka refinement parameters
-# Trainings per task = iteration * agent.sample + num_eval
-iteration: 10    # how many refinement iterations to run
+# Trainings per task = iteration * agent.sample * repeats + num_eval
+iteration: 5    # how many refinement iterations to run
+repeats: 3      # RL trainings per candidate in the search phase, each on its own
+                # seed. The candidate's fitness is their trimmed mean: the highest
+                # and the lowest are discarded and the rest averaged, so at
+                # repeats: 3 it is the middle run. This stops a single lucky
+                # training from deciding the ranking. Cost is linear, and the
+                # batch now submits agent.sample * repeats jobs at once, which
+                # must stay under runner.hpc.max_active_jobs (default 50).
+                # repeats: 1 reproduces the old one-training-per-candidate loop.
 num_eval: 5     # seeds the run's best reward is re-trained on, once, after the loop
 survivors: 5    # top-N candidates kept as the next iteration's parents (half of
                 # agent.sample). Each parent is improved in its own conversation
