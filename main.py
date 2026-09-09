@@ -57,6 +57,29 @@ def load_yaml_config(config_path):
         raise
 
 
+def normalize_warm_start_cfg(refine_cfg):
+    """Read refineconfig's `warm_start:` block, tolerating the old boolean form.
+
+    Warm start used to be a single `warm_start: true|false` scalar. Run
+    directories written before the block existed still carry that shape (each
+    run snapshots its own refineconfig.yaml), and those snapshots are meant to
+    stay re-runnable, so a bare bool is accepted and read as just `enabled`.
+    Everything else falls through to the defaults baked into rl_games' own
+    config.warm_start handling.
+    """
+    block = refine_cfg.get("warm_start", False)
+    if isinstance(block, bool):
+        block = {"enabled": block}
+    elif block is None:
+        block = {}
+    elif not isinstance(block, dict):
+        raise ValueError(
+            f"refineconfig warm_start must be a mapping or a bool, got {type(block).__name__}"
+        )
+    refine_cfg["warm_start"] = block
+    return block
+
+
 def resolve_task_config(task_name, tasks_repo):
     """Resolve a task selector to its ard_meta.yaml path inside tasks_repo.
 
@@ -110,6 +133,7 @@ def run_refinement(settings, task_cfg, refine_cfg):
         runner=settings["runner"],
         output_dir=output_dir,
         build_root=settings.get("build_root"),
+        warm_start=normalize_warm_start_cfg(refine_cfg),
     )
     scorer = FitnessScorer(scoring_mode=refine_cfg.get("scoring_mode", "global_max"))
 
@@ -124,10 +148,11 @@ def run_refinement(settings, task_cfg, refine_cfg):
     num_eval = int(refine_cfg.get("num_eval", 1))
     base_seed = int(refine_cfg.get("base_seed", 0))
     max_workers = min(agent.samples, int(refine_cfg.get("max_workers", agent.samples)))
-    warm_start = bool(refine_cfg.get("warm_start", False))
+    warm_start_cfg = normalize_warm_start_cfg(refine_cfg)
+    warm_start = bool(warm_start_cfg.get("enabled", False))
 
     # The previous iteration's winning candidate, whose checkpoint the next
-    # iteration resumes from; None means cold start (always true for
+    # iteration transfers from; None means cold start (always true for
     # iteration 1, since there is no previous best yet). Kept as the actual
     # record (not just its checkpoint path) so the log line and the
     # `warm_started_from` field persisted onto each new candidate both name
@@ -347,9 +372,11 @@ def build_parser(add_help=True):
     parser.add_argument("--refineconfig", type=str, default="configs/refineconfig.yaml",
                         help="Path to refinement configuration YAML")
     parser.add_argument("--warm-start", action="store_true",
-                        help="Resume each iteration from the previous iteration's "
-                             "de-noised winner instead of random weights (default: "
-                             "false, or refineconfig.yaml's warm_start).")
+                        help="Transfer each iteration's jobs from the previous "
+                             "iteration's de-noised winner instead of starting from "
+                             "random weights (default: false, or refineconfig.yaml's "
+                             "warm_start.enabled). What the transfer carries over is "
+                             "set by the rest of that block.")
     return parser
 
 
@@ -367,7 +394,8 @@ def main():
     if args.refine:
         refine_cfg = load_yaml_config(args.refineconfig)
         if args.warm_start:
-            refine_cfg["warm_start"] = True
+            # Runtime override only - refineconfig.yaml is never written back.
+            normalize_warm_start_cfg(refine_cfg)["enabled"] = True
         run_refinement(settings, task_cfg, refine_cfg)
     else:
         parser.print_help()

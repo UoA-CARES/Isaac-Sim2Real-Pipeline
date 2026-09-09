@@ -4,12 +4,28 @@ iteration: 10    # how many refinement iterations to run
 num_eval: 5   # times the best reward is re-trained to score it (the eval phase) default: 5, smoke-test: 1
 base_seed: 42   # eval-phase seeds are base_seed + k + 1 (passed to each job as env SEED -> train.py --seed)
 max_workers: 48
-warm_start: False  # resume each iteration's jobs from the previous iteration's best checkpoint (cold start on iteration 1)
+# Warm start: carry the previous iteration's winning checkpoint into the next
+# iteration's jobs instead of starting from random weights (iteration 1 always
+# cold-starts, since there is no previous winner yet).
+#
+# This is a *transfer*, not a resume: the reward function changes between
+# iterations, so the settings below choose which parts of the checkpoint are
+# still meaningful under the new reward. They are passed through to rl_games'
+# config.warm_start block via scripts/train.py.
+warm_start:
+  enabled: false                 # --warm-start turns this on for one run (not written back)
+  reset_optimizer: true          # drop the Adam moments and AMP scaler - they fit the old reward
+  reset_lr_schedule: true        # drop last_lr / entropy_coef, restart from the config values
+  reset_obs_normalizer: false    # keep observation statistics - the environment did not change
+  reset_value_normalizer: true   # drop value statistics - the return scale follows the reward
+  critic_warmup_epoch_count: 0   # critic-only epochs after transfer; not implemented, must be 0
+
 scoring_mode: global_max  # how a candidate's fitness is scored from its training curve:
   # global_max  - max fitness_function over the whole run (default). Rewards peak capability,
   #               but a candidate that spiked then declined still beats one that ended better.
   # last_5pct   - max fitness_function over just the final 5% of logged points. Favours
   #               stability/convergence over an early or mid-run spike that didn't hold up.
+
 
 # Eureka agent (LLM) settings
 agent:

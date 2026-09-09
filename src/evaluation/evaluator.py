@@ -129,6 +129,7 @@ class RewardEvaluator:
         runner: Dict,
         output_dir: str,
         build_root: Optional[str] = None,
+        warm_start: Optional[Dict] = None,
     ):
         self.task = task
         self.output_dir = os.path.abspath(os.path.expanduser(output_dir))
@@ -161,6 +162,13 @@ class RewardEvaluator:
         # by every candidate in a batch, so this saves reopening the archive once
         # per record.
         self._epoch_cache: Dict[str, int] = {}
+
+        # refineconfig's `warm_start:` block. Its `enabled` key is not used
+        # here - main.py already acted on it by deciding whether to pass a
+        # checkpoint at all, and a job only sees these settings when it is
+        # given one. Translated into scripts/train.py flags by
+        # _warm_start_flags below.
+        self.warm_start_cfg = dict(warm_start or {})
 
         if self.backend == "hpc":
             # Build + push each candidate's image, submit to the CARES scheduler,
@@ -290,6 +298,11 @@ class RewardEvaluator:
     def _effective_max_iterations(self, checkpoint_path: Optional[str]) -> Optional[str]:
         """The ``--max_iterations`` value for one job, accounting for warm-start.
 
+        Still correct under fine-grained warm start: a transfer deliberately
+        inherits the checkpoint's epoch counter (only the optimizer, the lr
+        schedule and the normalizers are selectable), so the arithmetic below
+        is unchanged.
+
         Without this, warm-starting from a checkpoint that already reached the
         configured ``MAX_ITERATIONS`` immediately hits that same ceiling on
         load (rl_games restores the checkpoint's own epoch count) and stops
@@ -323,6 +336,37 @@ class RewardEvaluator:
         """
         return bool(self.env_extra.get("plasticity", self.env_extra.get("PLASTICITY", False)))
 
+    # The refineconfig warm-start keys that map 1:1 onto scripts/train.py flags.
+    # `enabled` is not among them: it is expressed by --warm_start itself.
+    _WARM_START_BOOL_KEYS = (
+        "reset_optimizer",
+        "reset_lr_schedule",
+        "reset_obs_normalizer",
+        "reset_value_normalizer",
+    )
+
+    def _warm_start_flags(self) -> List[str]:
+        """``scripts/train.py`` flags for the configured warm-start settings.
+
+        One builder for both backends so the local (`EXTRA_ARGS`) and hpc (argv)
+        paths cannot drift apart. Every configured value is emitted explicitly
+        rather than relying on train.py's or rl_games' defaults, so what a job
+        actually does is decided by refineconfig.yaml and is visible in the
+        job's own command line.
+
+        Callers only invoke this when a checkpoint is being delivered, so it
+        never emits --warm_start for a cold-start job.
+        """
+        flags = ["--warm_start"]
+        for key in self._WARM_START_BOOL_KEYS:
+            value = self.warm_start_cfg.get(key)
+            if value is not None:
+                flags.append(f"--warm_start_{key} {'true' if value else 'false'}")
+        critic_warmup = self.warm_start_cfg.get("critic_warmup_epoch_count")
+        if critic_warmup is not None:
+            flags.append(f"--critic_warmup_epoch_count {int(critic_warmup)}")
+        return flags
+
     def _build_env(
         self, seed: Optional[int], checkpoint_path: Optional[str] = None
     ) -> Dict[str, str]:
@@ -339,8 +383,10 @@ class RewardEvaluator:
         baked to by ``WorkspaceManager.build_codebase``
         (``config.WARM_START_CHECKPOINT_REL`` under ``config.IMAGE_REPO_ROOT``)
         — the host-side ``checkpoint_path`` here only decides *whether* one was
-        baked in, not the path used. Both are appended after any
-        user-configured ``EXTRA_ARGS`` from ``runner.env``.
+        baked in, not the path used. A checkpoint additionally brings the
+        ``--warm_start`` flags from :meth:`_warm_start_flags`, which tell
+        rl_games to apply it as a transfer rather than as a resume. All are
+        appended after any user-configured ``EXTRA_ARGS`` from ``runner.env``.
         """
         env = {"TASK": self.task}
         if seed is not None:
@@ -356,6 +402,7 @@ class RewardEvaluator:
         extra_flags = []
         if checkpoint_path:
             extra_flags.append(f"--checkpoint {config.IMAGE_REPO_ROOT}/{config.WARM_START_CHECKPOINT_REL}")
+            extra_flags.extend(self._warm_start_flags())
         if self._plasticity_enabled():
             extra_flags.append("--plasticity")
         if extra_flags:
@@ -382,8 +429,9 @@ class RewardEvaluator:
         translated into ``--max_iterations`` / ``--num_envs`` flags. (WANDB_* are
         intentionally not forwarded: they cannot reach the container via command
         without exposing the key in ``hpc-client jobs``.) ``checkpoint_path``
-        (warm-start) rides the same way, as ``--checkpoint``, matching
-        ``scripts/train.py``'s own flag — pointed at the fixed in-image path
+        (warm-start) rides the same way, as ``--checkpoint`` plus the
+        ``--warm_start`` flags from :meth:`_warm_start_flags`, matching
+        ``scripts/train.py``'s own flags — pointed at the fixed in-image path
         the checkpoint was baked to (see ``_build_env``), not the host path.
         ``plasticity`` from ``runner.env`` is likewise appended as ``--plasticity``.
         """
@@ -392,6 +440,9 @@ class RewardEvaluator:
             flags += ["--seed", str(seed)]
         if checkpoint_path:
             flags += ["--checkpoint", f"{config.IMAGE_REPO_ROOT}/{config.WARM_START_CHECKPOINT_REL}"]
+            # Same flags as the local path, re-split because this backend passes
+            # argv rather than one EXTRA_ARGS string.
+            flags += [part for flag in self._warm_start_flags() for part in flag.split()]
         max_iterations = self._effective_max_iterations(checkpoint_path)
         if max_iterations is not None:
             flags += ["--max_iterations", max_iterations]
