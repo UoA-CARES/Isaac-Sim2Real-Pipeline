@@ -34,11 +34,13 @@ For each candidate, ARD builds that repo's `Dockerfile`, then either `docker run
 One refinement iteration:
 
 1. **Generate.** The LLM proposes `sample` candidate `compute_reward(self)` methods. Each returns **two** things, as in Eureka: the total reward, and a dict naming every component that went into it.
-2. **Inject.** Each candidate is spliced into a fresh copy of `ard-isaaclab-tasks` via AST and packed into a `.tar.gz` codebase. With `warm_start` on and a previous iteration's winner already known, that winner's checkpoint is baked into the same tarball (see step 6), so every candidate this iteration resumes from it instead of random weights.
+2. **Inject.** Each candidate is spliced into a fresh copy of `ard-isaaclab-tasks` via AST and packed into a `.tar.gz` codebase. With `warm_start.enabled` on and a previous iteration's winner already known, that winner's checkpoint is baked into the same tarball (see step 6), so every candidate this iteration starts from it instead of random weights.
 3. **Run.** Each codebase (with its `Dockerfile`) is trained according to `runner.backend`: the local backend builds and `docker run`s each candidate in turn; the HPC backend builds, pushes, and submits the whole batch to the CARES scheduler and trains it concurrently. Either way the task is selected via the job's config (`TASK`, plus `SEED` for eval runs).
 4. **Score.** Each finished job's `logs/` are read from its work dir; each is scored by its `fitness_function` (from the training TensorBoard logs). The same logs carry every reward component the candidate named, as `Episode/components_<name>`. The feedback summary keeps those, the fitness metric, and four rl_games training scalars — not the whole event file.
 5. **Re-evaluate & feed back.** The iteration's best candidate is retrained `num_eval` times to de-noise its score, and its training summary is fed back to the LLM to inform the next iteration.
-6. **Warm-start.** With `warm_start` enabled (`refineconfig.yaml`'s `warm_start: true`, or pass `--warm-start` — off by default), the de-noised winner's checkpoint is carried forward as the next iteration's starting point — read back in at step 2 above. Iteration 1 always cold-starts, since no previous winner exists yet.
+6. **Warm-start.** With `warm_start` enabled (`refineconfig.yaml`'s `warm_start.enabled: true`, or pass `--warm-start` — off by default), the de-noised winner's checkpoint is carried forward as the next iteration's starting point — read back in at step 2 above. Iteration 1 always cold-starts, since no previous winner exists yet.
+
+   This is a **transfer, not a resume**: the reward function changes between iterations, so only the parts of the checkpoint that are still meaningful under the new reward are applied. The rest of the `warm_start` block chooses which those are (`reset_optimizer`, `reset_lr_schedule`, `reset_obs_normalizer`, `reset_value_normalizer`), and rl_games applies them through its own `load_warmstart` path — separate from, and leaving untouched, the plain `--checkpoint` resume used to continue an interrupted run. The best-ever score is never carried over, so each candidate saves its own checkpoints under the new reward.
 
 This repeats every iteration, not just once at the end — each iteration both scores a winner and hands its checkpoint forward. Total trainings per task = `iteration * (sample + num_eval)`.
 
@@ -94,7 +96,20 @@ Three YAML files under `configs/`:
 |---|---|
 | `settings.yaml` | `tasks_repo`, `output_dir`, `build_root`, and the `runner` block (see below). |
 | `taskconfig.yaml` | The task: `task` (e.g. `Isaac-ARD-Cartpole-v0`), `env_file` (the env whose `compute_reward` is rewritten), `description` (the LLM's brief), `max_iterations`. |
-| `refineconfig.yaml` | The loop: `iteration`, `num_eval`, `base_seed`, `warm_start` (default `false` — resume each iteration from the previous iteration's de-noised winner instead of random weights, when enabled; see [How the loop works](#how-the-loop-works)), and the `agent` block (`model`, `base_url`, `sample`, `temperature`). |
+| `refineconfig.yaml` | The loop: `iteration`, `num_eval`, `base_seed`, the `warm_start` block (see below), and the `agent` block (`model`, `base_url`, `sample`, `temperature`). |
+
+The `warm_start` block starts each iteration's candidates from the previous iteration's de-noised winner instead of random weights (see [How the loop works](#how-the-loop-works)). Because the reward function changes between iterations, this is a transfer rather than a resume, and each key says what survives it:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Warm start at all. `--warm-start` turns it on for one run without editing the file. |
+| `reset_optimizer` | `true` | Drop the checkpoint's Adam moments and AMP loss scale — they were fitted to the old reward. |
+| `reset_lr_schedule` | `true` | Drop `last_lr` / `entropy_coef` and restart from the task's configured values. |
+| `reset_obs_normalizer` | `false` | Keep the observation statistics: warm start changes the reward, not the environment, and the transferred policy expects the inputs it was trained on. |
+| `reset_value_normalizer` | `true` | Drop the value statistics: the return scale follows the reward, which just changed. |
+| `critic_warmup_epoch_count` | `0` | Critic-only epochs after the transfer. Not implemented yet — any other value raises. |
+
+Always carried over: the network weights and the epoch/frame counters (the epoch budget is extended by the inherited count, so every candidate still gets its full `MAX_ITERATIONS` of new training). Never carried over: the best-ever score and the environment state.
 
 `runner.backend` in `settings.yaml` picks how candidates train:
 
@@ -134,7 +149,7 @@ python main.py --refine --task cartpole
 python main.py --refine --settings configs/settings.yaml \
                --taskconfig configs/taskconfig.yaml \
                --refineconfig configs/refineconfig.yaml
-# enable warm-starting (off by default), overriding refineconfig.yaml's warm_start:
+# enable warm-starting (off by default), overriding refineconfig.yaml's warm_start.enabled:
 python main.py --refine --task cartpole --warm-start
 ```
 

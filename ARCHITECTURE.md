@@ -150,14 +150,51 @@ trainings.
 That winner's checkpoint (`RewardRecord.checkpoint_path`, set by
 `RewardEvaluator` after each successful run — see `find_checkpoint` in
 `result_processor.py`) is then carried into the *next* iteration as
-`warm_start_checkpoint`, when `warm_start` is enabled: every candidate in the
-next iteration's run and eval phases resumes training from it instead of
+`warm_start_checkpoint`, when `warm_start.enabled` is set: every candidate in the
+next iteration's run and eval phases starts training from it instead of
 random weights (baked into that candidate's build tarball, delivered via
 `--checkpoint`; see `evaluator.py`'s `_build_env`/`_build_hpc_command` and
 `_effective_max_iterations`, which extends the configured epoch budget by the
 checkpoint's own inherited epoch count). Iteration 1 always cold-starts, since
 no previous winner exists yet; `warm_start_checkpoint` also only lives for one
 continuous `--refine` invocation, not across separate runs.
+
+### Transfer, not resume
+
+The reward function differs between the checkpoint and the run that loads it, so
+warm start is a *transfer*. It travels a path in rl_games kept deliberately
+parallel to — and separate from — checkpoint resume:
+
+```
+refineconfig.yaml  warm_start: {...}
+  → evaluator.py   _warm_start_flags()      → --warm_start --warm_start_reset_* ...
+  → train.py       agent_cfg[params][config][warm_start]
+  → torch_runner   _restore()               → agent.load_warmstart(ckpt)
+  → a2c_common     set_warmstart_weights()
+```
+
+Plain `--checkpoint` without `--warm_start` still reaches `agent.restore()` →
+`set_full_state_weights()`, unchanged, so resuming an interrupted run keeps
+restoring the complete state exactly as it always did.
+
+What the transfer applies:
+
+- **Always:** the network weights (with the normalizer buffers they carry) and
+  the epoch/frame counters — `_effective_max_iterations` is sized against the
+  inherited epoch count, so it stays correct.
+- **Never:** `last_mean_rewards` and `env_state`. The best-ever score gates the
+  "best" checkpoint save, and one earned under the previous reward would suppress
+  every save of the new run — leaving the *following* iteration nothing to warm
+  start from. The environment is freshly built with a different reward.
+- **Configured:** the optimizer state (and the AMP loss scale with it), the lr
+  schedule (`last_lr`/`entropy_coef`), the observation normalizer, and the value
+  normalizer. Defaults reset everything except the observation statistics, which
+  are still valid because the environment did not change.
+
+The normalizers are worth a note: they are `RunningMeanStd` **buffers of the
+model**, so they ride inside the checkpoint's `model` blob rather than as keys of
+their own. Resetting one is an in-place overwrite after the load, not an omitted
+key — see `_reset_running_mean_std` in `a2c_common.py`.
 
 ## Module map (`src/`)
 
