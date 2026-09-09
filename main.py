@@ -111,7 +111,7 @@ def run_refinement(settings, task_cfg, refine_cfg):
         output_dir=output_dir,
         build_root=settings.get("build_root"),
     )
-    scorer = FitnessScorer()
+    scorer = FitnessScorer(scoring_mode=refine_cfg.get("scoring_mode", "global_max"))
 
     agent = EurekaAgent(
         task_description=task_cfg["description"],

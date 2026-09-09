@@ -10,6 +10,7 @@ all metric reading and ranking lives here so the scoring policy can change
 """
 
 import os
+import math
 import logging
 from math import isfinite
 from statistics import fmean, stdev
@@ -20,15 +21,39 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
+# Valid values for FitnessScorer's scoring_mode.
+SCORING_MODE_GLOBAL_MAX = "global_max"   # max fitness over the whole run (default, prior behaviour)
+SCORING_MODE_LAST_5PCT = "last_5pct"     # max fitness over just the final 5% of logged points
+VALID_SCORING_MODES = (SCORING_MODE_GLOBAL_MAX, SCORING_MODE_LAST_5PCT)
+
 
 class FitnessScorer:
     """Reads the fitness metric from captured runs and ranks candidates."""
 
-    def __init__(self, fitness_tag: str = config.FITNESS_METRIC):
+    def __init__(
+        self,
+        fitness_tag: str = config.FITNESS_METRIC,
+        scoring_mode: str = SCORING_MODE_GLOBAL_MAX,
+    ):
         # Matched on the final path segment so whatever scope rl_games/
         # IsaacAlgoObserver prefixes it with (e.g. "Episode/fitness_function")
         # still resolves. See `_resolve_tag` for why it is not looser than that.
         self.fitness_tag = fitness_tag
+
+        # global_max: a candidate's score is the single highest fitness_function
+        # value it ever logged, anywhere in its run. Rewards peak capability, but
+        # a candidate that spiked early or mid-run then declined (noise, or a
+        # real later instability) still wins over a candidate that never spiked
+        # as high but ended up more stable/better by the time training stopped.
+        # last_5pct: restricts that same max to only the final 5% of logged
+        # points, so a candidate has to still be near its best *late* in
+        # training to score well — favours stability/convergence over an
+        # early or mid-run fluke that didn't hold up.
+        if scoring_mode not in VALID_SCORING_MODES:
+            raise ValueError(
+                f"scoring_mode={scoring_mode!r} not recognised; expected one of {VALID_SCORING_MODES}"
+            )
+        self.scoring_mode = scoring_mode
 
     # ---------------------------------------------------------------- scoring
     def score(self, record) -> float:
@@ -44,7 +69,7 @@ class FitnessScorer:
         return records
 
     def read_fitness(self, tb_file: Optional[str]) -> float:
-        """Return the max value of the fitness metric over training (-inf if absent)."""
+        """Return this run's fitness score, per ``self.scoring_mode`` (-inf if absent)."""
         if not tb_file or not os.path.exists(tb_file):
             logger.error(f"TensorBoard file not found: {tb_file}")
             return float("-inf")
@@ -57,9 +82,12 @@ class FitnessScorer:
                     f"Available: {ea.scalars.Keys()}"
                 )
                 return float("-inf")
-            events = ea.Scalars(tag)
+            events = ea.Scalars(tag)  # chronological (step) order, as logged
             if not events:
                 return float("-inf")
+            if self.scoring_mode == SCORING_MODE_LAST_5PCT:
+                window_size = max(1, math.ceil(len(events) * 0.05))
+                events = events[-window_size:]
             return float(max(e.value for e in events))
         except Exception as e:  # noqa: BLE001 - TB parsing surfaces many error types
             logger.error(f"Error reading fitness from {tb_file}: {e}")
