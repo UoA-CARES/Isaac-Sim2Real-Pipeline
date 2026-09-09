@@ -134,6 +134,7 @@ def run_refinement(settings, task_cfg, refine_cfg):
         output_dir=output_dir,
         build_root=settings.get("build_root"),
         warm_start=normalize_warm_start_cfg(refine_cfg),
+        checkpoint_sel_mode=refine_cfg.get("candidate_checkpoint_sel_mode", "best"),
     )
     scorer = FitnessScorer(scoring_mode=refine_cfg.get("scoring_mode", "global_max"))
 

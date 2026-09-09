@@ -31,6 +31,12 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
+# Valid values for ResultProcessor's checkpoint_sel_mode — which .pth of a
+# finished run warm-starting resumes from. See `find_checkpoint`.
+CHECKPOINT_SEL_BEST = "best"       # rl_games' best-raw-reward <name>.pth (default, prior behaviour)
+CHECKPOINT_SEL_LATEST = "latest"   # the newest periodic last_*.pth snapshot
+VALID_CHECKPOINT_SEL_MODES = (CHECKPOINT_SEL_BEST, CHECKPOINT_SEL_LATEST)
+
 
 def load_accumulator(tb_file: str):
     """Load a TensorBoard event file into an EventAccumulator (shared helper)."""
@@ -51,7 +57,22 @@ class CapturedArtifacts:
 
 
 class ResultProcessor:
-    """Reads a job's in-place logs and writes the scalar summary used for feedback."""
+    """Reads a job's in-place logs and writes the scalar summary used for feedback.
+
+    Args:
+        checkpoint_sel_mode: Which ``.pth`` of a finished run :meth:`capture`
+            reports as the run's checkpoint (i.e. what warm-starting resumes
+            from). One of :data:`VALID_CHECKPOINT_SEL_MODES`; see
+            :meth:`find_checkpoint`.
+    """
+
+    def __init__(self, checkpoint_sel_mode: str = CHECKPOINT_SEL_BEST):
+        if checkpoint_sel_mode not in VALID_CHECKPOINT_SEL_MODES:
+            raise ValueError(
+                f"candidate_checkpoint_sel_mode={checkpoint_sel_mode!r} not recognised; "
+                f"expected one of {VALID_CHECKPOINT_SEL_MODES}"
+            )
+        self.checkpoint_sel_mode = checkpoint_sel_mode
 
     # ---------------------------------------------------------------- locate
     @staticmethod
@@ -70,22 +91,47 @@ class ResultProcessor:
         return candidates[0]
 
     @staticmethod
-    def find_checkpoint(run_dir: str) -> Optional[str]:
+    def find_checkpoint(
+        run_dir: str, mode: str = CHECKPOINT_SEL_BEST
+    ) -> Optional[str]:
         """Find the checkpoint under ``run_dir/nn`` to warm-start from.
 
         rl_games writes two kinds of file here: periodic ``last_<name>_ep_<N>_
         rew_<R>.pth`` snapshots (including a final one when training ends), and
         a single plain ``<name>.pth`` that it only overwrites when a *new* best
         reward is reached (once training has run past ``save_best_after`` in the
-        task's ``rl_games_ppo_cfg.yaml``). Training reward isn't monotonic, so
-        the final periodic snapshot can score worse than an earlier peak — the
-        plain best-reward file is what warm-starting should resume from. A run
-        too short to ever clear ``save_best_after`` won't have one, so fall back
-        to the newest periodic snapshot in that case.
+        task's ``rl_games_ppo_cfg.yaml``).
+
+        ``mode`` picks between them:
+
+        * ``best`` — the plain best-reward file. Training reward isn't
+          monotonic, so the final periodic snapshot can score worse than an
+          earlier peak. A run too short to ever clear ``save_best_after`` won't
+          have this file, so fall back to the newest periodic snapshot.
+        * ``latest`` — the newest periodic snapshot, i.e. the state training
+          actually ended in, whatever its reward. Restricted to ``last_*``
+          files so it never silently returns the best-reward file (which is the
+          newest file on disk whenever the last new best landed at the end of
+          training); falls back to the newest of everything if a run has no
+          periodic snapshots.
+
+        TODO: ``best`` defers to rl_games' own notion of best, which is scored
+        on **raw training reward** — a questionable basis for warm-starting on
+        two counts. (1) The LLM rewrites the reward function every iteration,
+        so reward scale is not comparable across iterations: "best reward"
+        measures something different each round. (2) Reward is not
+        ``fitness_function``, the ground-truth objective ARD actually ranks
+        candidates by, so the highest-reward epoch need not be the
+        highest-fitness one. The real fix is a fitness-based save trigger in
+        the rl_games fork — see docs/FITNESS_BASED_CHECKPOINT_GUIDE.md. Until
+        then ``latest`` exists so the two policies can be compared empirically.
         """
         candidates = glob.glob(os.path.join(run_dir, "nn", "*.pth"))
         if not candidates:
             return None
+        if mode == CHECKPOINT_SEL_LATEST:
+            periodic = [c for c in candidates if os.path.basename(c).startswith("last_")]
+            return max(periodic or candidates, key=os.path.getmtime)
         best = [c for c in candidates if not os.path.basename(c).startswith("last_")]
         if best:
             return max(best, key=os.path.getmtime)
@@ -115,7 +161,7 @@ class ResultProcessor:
 
         captured = CapturedArtifacts(
             log_path=run_dir, tb_path=tb_path, summary_path=summary_path,
-            checkpoint_path=self.find_checkpoint(run_dir),
+            checkpoint_path=self.find_checkpoint(run_dir, self.checkpoint_sel_mode),
         )
         logger.info(f"Captured artifacts: {run_dir}")
         return captured

@@ -20,6 +20,14 @@ warm_start:
   reset_value_normalizer: true   # drop value statistics - the return scale follows the reward
   critic_warmup_epoch_count: 0   # critic-only epochs after transfer; not implemented, must be 0
 
+candidate_checkpoint_sel_mode: best  # which .pth of the winning candidate warm start resumes from:
+  # best    - rl_games' plain <name>.pth, only overwritten when a new best *raw training reward*
+  #           is reached (default, prior behaviour). Note that reward scale shifts between
+  #           iterations as the LLM rewrites the reward, and reward is not the fitness_function
+  #           ARD actually ranks candidates by.
+  # latest  - the newest periodic last_*_ep_<N>_rew_<R>.pth snapshot, i.e. the state training
+  #           actually ended in, whatever its reward.
+
 scoring_mode: global_max  # how a candidate's fitness is scored from its training curve:
   # global_max  - max fitness_function over the whole run (default). Rewards peak capability,
   #               but a candidate that spiked then declined still beats one that ended better.

@@ -33,7 +33,7 @@ from .local_runner import LocalRunner
 from .hpc_runner import HPCRunner, HPCRunnerError, HPCJob
 from .workspace_manager import WorkspaceManager
 from .reward_injection import RewardInjectionError
-from .result_processor import ResultProcessor
+from .result_processor import ResultProcessor, CHECKPOINT_SEL_BEST
 from . import config
 from src.reward_history import (
     RewardRecord,
@@ -119,6 +119,10 @@ class RewardEvaluator:
             (``<output_dir>/<tag>/``). For the hpc backend this is where NAS
             artifacts are recycled to.
         build_root: Optional staging dir for codebase tarballs.
+        checkpoint_sel_mode: Which of a finished run's ``nn/*.pth`` files is
+            recorded as its checkpoint, and so is carried into the next
+            iteration when warm-starting. See
+            :meth:`ResultProcessor.find_checkpoint`.
     """
 
     def __init__(
@@ -130,6 +134,7 @@ class RewardEvaluator:
         output_dir: str,
         build_root: Optional[str] = None,
         warm_start: Optional[Dict] = None,
+        checkpoint_sel_mode: str = CHECKPOINT_SEL_BEST,
     ):
         self.task = task
         self.output_dir = os.path.abspath(os.path.expanduser(output_dir))
@@ -157,7 +162,7 @@ class RewardEvaluator:
             env_file_rel=env_file_rel,
             build_root=build_root,
         )
-        self.processor = ResultProcessor()
+        self.processor = ResultProcessor(checkpoint_sel_mode=checkpoint_sel_mode)
         # Memoised checkpoint -> epoch reads. One warm-start checkpoint is shared
         # by every candidate in a batch, so this saves reopening the archive once
         # per record.
