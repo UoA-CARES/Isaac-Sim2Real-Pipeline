@@ -19,6 +19,7 @@ output", while scoring is a separate, swappable step.
 """
 
 import os
+import re
 import glob
 import logging
 from typing import Optional
@@ -36,6 +37,41 @@ logger = logging.getLogger(__name__)
 CHECKPOINT_SEL_BEST = "best"       # rl_games' best-raw-reward <name>.pth (default, prior behaviour)
 CHECKPOINT_SEL_LATEST = "latest"   # the newest periodic last_*.pth snapshot
 VALID_CHECKPOINT_SEL_MODES = (CHECKPOINT_SEL_BEST, CHECKPOINT_SEL_LATEST)
+
+# rl_games periodic snapshot names: last_<name>_ep_<N>_rew_<R>.pth. The reward
+# field has two spellings (see `checkpoint_epoch`), so only the epoch is matched.
+_CHECKPOINT_EPOCH_RE = re.compile(r"^last_.*_ep_(\d+)_rew_")
+
+
+def checkpoint_epoch(path: str) -> Optional[int]:
+    """Epoch number parsed out of an rl_games snapshot name, or None.
+
+    rl_games saves the end of training twice, from two different branches of its
+    training loop, and spells the reward differently in each::
+
+        last_shadow_hand_ep_5000_rew_491.04062.pth    # periodic (save_frequency)
+        last_shadow_hand_ep_5000_rew__491.04062_.pth  # terminal (max_epochs)
+
+    The terminal name stringifies the whole ``mean_rewards`` *array* and swaps
+    its brackets for underscores, hence the doubled/trailing ``_``. Both hold the
+    same weights, and only the epoch field is parsed here, so both match.
+    """
+    match = _CHECKPOINT_EPOCH_RE.match(os.path.basename(path))
+    return int(match.group(1)) if match else None
+
+
+def _latest_snapshot(candidates: list) -> Optional[str]:
+    """The furthest-along of ``candidates``, by epoch (in file name, see above) then mtime.
+
+    See :meth:`ResultProcessor.find_checkpoint` for why mtime alone will not do.
+    """
+    periodic = [c for c in candidates if checkpoint_epoch(c) is not None]
+    if periodic:
+        return max(periodic, key=lambda c: (checkpoint_epoch(c), os.path.getmtime(c)))
+    # No parseable snapshot names (a renamed or hand-made nn/): nothing better
+    # than mtime is available, unreliable as it is here.
+    named = [c for c in candidates if os.path.basename(c).startswith("last_")]
+    return max(named or candidates, key=os.path.getmtime) if candidates else None
 
 
 def load_accumulator(tb_file: str):
@@ -107,13 +143,25 @@ class ResultProcessor:
         * ``best`` — the plain best-reward file. Training reward isn't
           monotonic, so the final periodic snapshot can score worse than an
           earlier peak. A run too short to ever clear ``save_best_after`` won't
-          have this file, so fall back to the newest periodic snapshot.
-        * ``latest`` — the newest periodic snapshot, i.e. the state training
+          have this file, so fall back to what ``latest`` would return.
+        * ``latest`` — the last periodic snapshot, i.e. the state training
           actually ended in, whatever its reward. Restricted to ``last_*``
           files so it never silently returns the best-reward file (which is the
           newest file on disk whenever the last new best landed at the end of
           training); falls back to the newest of everything if a run has no
           periodic snapshots.
+
+        "Last" is ranked by the **epoch parsed from the filename**, not by
+        mtime: the run directories this reads have been copied at least twice
+        (the scheduler's NAS copy, then :meth:`HPCRunner.recycle_artifacts`'
+        ``shutil.copytree``), and a copy that does not preserve times restamps
+        every file within the same second or two, in the copy's own enumeration
+        order. Observed order in a real run is lexicographic — which puts
+        ``ep_600`` and ``ep_800`` *after* ``ep_5000``. mtime survives only as
+        a tie-break, which is also what correctly separates the two files a run
+        ends with: rl_games saves the final epoch twice, once from its periodic
+        ``save_frequency`` branch and once from its ``max_epochs`` branch (see
+        :func:`checkpoint_epoch`), the latter written second.
 
         TODO: ``best`` defers to rl_games' own notion of best, which is scored
         on **raw training reward** — a questionable basis for warm-starting on
@@ -130,12 +178,11 @@ class ResultProcessor:
         if not candidates:
             return None
         if mode == CHECKPOINT_SEL_LATEST:
-            periodic = [c for c in candidates if os.path.basename(c).startswith("last_")]
-            return max(periodic or candidates, key=os.path.getmtime)
+            return _latest_snapshot(candidates)
         best = [c for c in candidates if not os.path.basename(c).startswith("last_")]
         if best:
             return max(best, key=os.path.getmtime)
-        return max(candidates, key=os.path.getmtime)
+        return _latest_snapshot(candidates)
 
     # --------------------------------------------------------------- capture
     def capture(self, work_dir: str) -> Optional[CapturedArtifacts]:
