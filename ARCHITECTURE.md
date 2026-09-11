@@ -196,6 +196,46 @@ model**, so they ride inside the checkpoint's `model` blob rather than as keys o
 their own. Resetting one is an in-place overwrite after the load, not an omitted
 key — see `_reset_running_mean_std` in `a2c_common.py`.
 
+### Critic warmup
+
+`warm_start.critic_warmup_epoch_count` makes the first N epochs after a transfer
+critic-only. The problem it solves: the transferred value function was fitted to
+the *old* reward, so the very first PPO updates compute advantages from a stale
+baseline and push the policy — the one thing worth transferring — in an arbitrary
+direction. The warmup lets the critic re-fit before the actor is allowed to move.
+
+What "the actor is held still" means depends on the network shape, and the
+distinction matters because the ARD tasks are the second case:
+
+| `network.separate` | Frozen | Trains |
+| --- | --- | --- |
+| `true` | actor trunk + actor head | critic trunk + value head |
+| `false` (ARD tasks) | the **shared trunk** + actor head | the value head alone |
+
+With a shared trunk there is no critic-side trunk to train, so letting the trunk
+move would move the policy — freezing it is what makes the window actually
+critic-only. `_critic_warmup_frozen_parameters` in `a2c_common.py` expresses this
+as "every model parameter that is not the critic's", which is what puts the
+shared trunk on the right side without special-casing it.
+
+Two details that are not obvious:
+
+- The window is anchored to the epoch the checkpoint restored
+  (`checkpoint_epoch + N`), not to 0, because a transfer inherits the epoch
+  counter. A window measured from 0 would already be over before the first epoch
+  of every iteration after the first.
+- The lr schedule is frozen for the same window. With the policy fixed, measured
+  KL is exactly 0, and an adaptive scheduler reads that as "far below target" and
+  raises the lr on every mini-epoch — so the actor would unfreeze onto a learning
+  rate near `lr_schedule_max`, the opposite of what the warmup is for.
+
+Plasticity monitoring is suspended over the window too: a frozen trunk produces no
+weight change, so its units read as dormant and could be replaced for no reason
+other than having been deliberately held still.
+
+The warmup epochs come out of the run's existing budget — `_effective_max_iterations`
+is unchanged — so candidates stay comparable on equal sample budget.
+
 ## Module map (`src/`)
 
 - `evaluation/local_runner.py` — builds + `docker run`s each candidate locally (one blocking `run`: build → run → result).

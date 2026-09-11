@@ -107,7 +107,7 @@ The `warm_start` block starts each iteration's candidates from the previous iter
 | `reset_lr_schedule` | `true` | Drop `last_lr` / `entropy_coef` and restart from the task's configured values. |
 | `reset_obs_normalizer` | `false` | Keep the observation statistics: warm start changes the reward, not the environment, and the transferred policy expects the inputs it was trained on. |
 | `reset_value_normalizer` | `true` | Drop the value statistics: the return scale follows the reward, which just changed. |
-| `critic_warmup_epoch_count` | `0` | Critic-only epochs after the transfer. Not implemented yet — any other value raises. |
+| `critic_warmup_epoch_count` | `0` | Critic-only epochs immediately after the transfer, before the policy is allowed to move. The actor head is frozen, and because the ARD tasks share a trunk between actor and critic, the trunk is frozen too — only the value head trains. The lr schedule is held still for the same window. These epochs come out of the run's budget rather than being added to it. `0` disables. |
 
 Always carried over: the network weights and the epoch/frame counters (the epoch budget is extended by the inherited count, so every candidate still gets its full `MAX_ITERATIONS` of new training). Never carried over: the best-ever score and the environment state.
 

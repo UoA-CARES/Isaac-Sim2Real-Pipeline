@@ -18,9 +18,17 @@ warm_start:
   reset_lr_schedule: true        # drop last_lr / entropy_coef, restart from the config values
   reset_obs_normalizer: false    # keep observation statistics - the environment did not change
   reset_value_normalizer: true   # drop value statistics - the return scale follows the reward
-  critic_warmup_epoch_count: 0   # critic-only epochs after transfer; not implemented, must be 0
+  critic_warmup_epoch_count: 0   # critic-only epochs right after the transfer (0 disables).
+                                 # The transferred critic was fitted to the *old* reward, so the
+                                 # first updates score the policy against a stale baseline. These
+                                 # epochs let it re-fit first: the actor head is frozen, and since
+                                 # the ARD tasks share a trunk between actor and critic, the trunk
+                                 # is frozen too - only the value head trains. The lr schedule is
+                                 # held still over the window as well (with the policy fixed, KL
+                                 # is 0, which would otherwise ramp the lr). These epochs come out
+                                 # of the run's normal budget, they are not added to it.
 
-candidate_checkpoint_sel_mode: best  # which .pth of the winning candidate warm start resumes from:
+candidate_checkpoint_sel_mode: latest  # which .pth of the winning candidate warm start resumes from:
   # best    - rl_games' plain <name>.pth, only overwritten when a new best *raw training reward*
   #           is reached (default, prior behaviour). Note that reward scale shifts between
   #           iterations as the LLM rewrites the reward, and reward is not the fitness_function
@@ -28,7 +36,7 @@ candidate_checkpoint_sel_mode: best  # which .pth of the winning candidate warm 
   # latest  - the newest periodic last_*_ep_<N>_rew_<R>.pth snapshot, i.e. the state training
   #           actually ended in, whatever its reward.
 
-scoring_mode: global_max  # how a candidate's fitness is scored from its training curve:
+scoring_mode: last_5pct  # how a candidate's fitness is scored from its training curve:
   # global_max  - max fitness_function over the whole run (default). Rewards peak capability,
   #               but a candidate that spiked then declined still beats one that ended better.
   # last_5pct   - max fitness_function over just the final 5% of logged points. Favours

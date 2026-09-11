@@ -174,6 +174,7 @@ class RewardEvaluator:
         # given one. Translated into scripts/train.py flags by
         # _warm_start_flags below.
         self.warm_start_cfg = dict(warm_start or {})
+        self._validate_critic_warmup(self.warm_start_cfg)
 
         if self.backend == "hpc":
             # Build + push each candidate's image, submit to the CARES scheduler,
@@ -349,6 +350,29 @@ class RewardEvaluator:
         "reset_obs_normalizer",
         "reset_value_normalizer",
     )
+
+    @staticmethod
+    def _validate_critic_warmup(cfg: dict) -> None:
+        """Reject a bad critic_warmup_epoch_count before any job is built.
+
+        rl_games validates this too, but only once the job is running inside its
+        container - which surfaces to ARD as a generic job failure, after an
+        image build and a scheduler round trip. Checking it at construction
+        fails the whole run immediately, naming the key.
+        """
+        value = cfg.get("critic_warmup_epoch_count")
+        if value is None:
+            return
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(
+                "refineconfig warm_start.critic_warmup_epoch_count must be an integer, "
+                f"got {value!r}"
+            )
+        if value < 0:
+            raise ValueError(
+                "refineconfig warm_start.critic_warmup_epoch_count must be >= 0, "
+                f"got {value}"
+            )
 
     def _warm_start_flags(self) -> List[str]:
         """``scripts/train.py`` flags for the configured warm-start settings.

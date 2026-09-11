@@ -49,14 +49,17 @@ runner:
   # Smoke-test setting: cap PPO iterations so each job finishes quickly.
   env:
     MAX_ITERATIONS: "5000"    # PPO iterations (--max_iterations) — clears shadow_hand's save_best_after:100 with margin. 300 for smoke test, 5000 for true.
-    NUM_ENVS: "2048"         # parallel envs (--num_envs) — scaled down from the task's default 8192; must be a
+    NUM_ENVS: "8192"         # parallel envs (--num_envs) — scaled down from the task's default 8192; must be a
     # multiple of 2048 for shadow_hand specifically (batch_size = num_envs * horizon_length(16) must divide
     # evenly into minibatch_size(32768) per its rl_games_ppo_cfg.yaml, unlike cartpole which tolerated 1024)
     plasticity: true  
            # enables plasticity monitoring/unit-replacement (--plasticity on train.py)
 
-  # Optional `docker build --build-arg` values (local backend):
-  # build_args: {}
+  # Optional `docker build --build-arg` values. LOCAL BACKEND ONLY — HPCRunner.submit
+  # runs a plain `docker build` with no --build-arg, so hpc jobs silently ignore this
+  # and keep building the Dockerfile's defaults.
+  # build_args:
+  #   RL_GAMES_REF: Feature/Plasticity
   # Optional override of the image CMD (placeholders {task}, {seed}). Leave unset
   # to use the image's env-driven entrypoint (the recommended path).
   # command_template: "bash quickstart.sh {task}"
